@@ -15,9 +15,9 @@ const (
 	ChangelogURL = "https://antigravity.google/changelog"
 
 	// Primary Download Endpoints
-	CLIDownloadURL = "https://antigravity.google/download/linux/x64/cli"
-	IDEDownloadURL = "https://antigravity.google/download/linux/x64/ide"
-	HubDownloadURL = "https://antigravity.google/download/linux/x64/hub"
+	CLIDownloadURL = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json"
+	IDEDownloadURL = "https://antigravity.google/releases"
+	HubDownloadURL = "https://antigravity.google/releases"
 
 	// GitHub Fallback Download URL Templates
 	CLIFallbackURL = "https://github.com/gabrielima7/agy/releases/download/{version}/agy-linux-amd64.tar.gz"
@@ -102,7 +102,7 @@ var CLIApp = AppSpec{
 	BinaryName:          "agy",
 	ReleasesPageURL:     ReleasesPageURL,
 	ChangelogURL:        ChangelogURL,
-	DownloadURLTemplate: CLIDownloadURL,
+	DownloadURLTemplate: CLIDownloadURL, // Will use JSON manifest
 	FallbackURLTemplate: CLIFallbackURL,
 	IsGUI:               false,
 }

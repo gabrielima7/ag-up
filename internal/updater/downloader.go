@@ -13,6 +13,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha512"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gabrielima7/GopherCore/guard"
+	"github.com/gabrielima7/GopherCore/result"
 	"github.com/gabrielima7/GopherCore/retry"
 	"github.com/gabrielima7/ag-up/internal/config"
 )
@@ -88,9 +91,10 @@ func createLocalPackage(tmpPath, appID string) error {
 }
 
 // DownloadTarGz fetches the tarball at rawURL and writes it to a uniquely
-// named temporary file under os.TempDir(). If remote mirror returns 404, it
-// falls back to constructing a valid local release package so updates succeed.
-func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (string, error) {
+// named temporary file under os.TempDir(). If expectedSHA is not empty, it calculates
+// the SHA512 hash of the downloaded payload and aborts on mismatch.
+// If remote mirror returns 404, it falls back to constructing a valid local release package so updates succeed.
+func DownloadTarGz(ctx context.Context, rawURL, appID, expectedSHA string, maxRetries int) result.Result[string] {
 	// Sanitise inputs through guard to strip null bytes and control characters.
 	safeURL := guard.SanitizeString(rawURL)
 	safeID := guard.SanitizeString(appID)
@@ -102,7 +106,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 
 	f, err := os.Create(tmpPath)
 	if err != nil {
-		return "", fmt.Errorf("downloader: create temp file for %q: %w", appID, err)
+		return result.Err[string](fmt.Errorf("downloader: create temp file for %q: %w", appID, err))
 	}
 
 	removeOnExit := true
@@ -158,6 +162,27 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 				return fmt.Errorf("downloader: write body for %q: %w", appID, err)
 			}
 
+			// Verify hash if provided
+			if expectedSHA != "" {
+				if err := f.Sync(); err != nil {
+					return fmt.Errorf("downloader: sync temp file: %w", err)
+				}
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return fmt.Errorf("downloader: seek temp file for hash: %w", err)
+				}
+
+				h := sha512.New()
+				if _, err := io.Copy(h, f); err != nil {
+					return fmt.Errorf("downloader: hash calculation failed: %w", err)
+				}
+
+				actualSHA := hex.EncodeToString(h.Sum(nil))
+				if actualSHA != expectedSHA {
+					return fmt.Errorf("downloader: SHA512 mismatch. expected %q, got %q", expectedSHA, actualSHA)
+				}
+				slog.Info("downloader: SHA512 validated", "app_id", appID, "sha", expectedSHA)
+			}
+
 			slog.Debug("downloader: tarball fetched",
 				"app_id", appID,
 				"bytes", written,
@@ -187,12 +212,12 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 			)
 			if pkgErr := createLocalPackage(tmpPath, appID); pkgErr == nil {
 				removeOnExit = false
-				return tmpPath, nil
+				return result.Ok(tmpPath)
 			}
 		}
-		return "", err
+		return result.Err[string](err)
 	}
 
 	removeOnExit = false
-	return tmpPath, nil
+	return result.Ok(tmpPath)
 }
