@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gabrielima7/GopherCore/async"
+	"github.com/gabrielima7/GopherCore/jsonutil"
 	"github.com/gabrielima7/GopherCore/result"
 	"github.com/gabrielima7/GopherCore/retry"
 	"github.com/gabrielima7/ag-up/internal/config"
@@ -51,8 +52,14 @@ type CheckResult struct {
 	// ETag is the HTTP ETag or Last-Modified header from HEAD request.
 	ETag string
 
-	// DownloadURL is the resolved direct download URL.
+	// DownloadURL is the fallback/template direct download URL.
 	DownloadURL string
+
+	// ResolvedURL is the final, dynamic direct download URL (replaces DownloadURL).
+	ResolvedURL string
+
+	// ExpectedSHA512 is the expected SHA512 hash of the payload, if provided.
+	ExpectedSHA512 string
 
 	// NeedsUpdate is true when RemoteVersion differs from LocalVersion.
 	NeedsUpdate bool
@@ -205,34 +212,61 @@ func fetchVersionFromHEAD(ctx context.Context, downloadURL string) (version stri
 }
 
 // scrapePageOrBundle fetches an HTML page and any linked Astro JS scripts to extract app version.
-func scrapePageOrBundle(ctx context.Context, pageURL string, appID string) string {
+// It returns (version, resolvedURL)
+func scrapePageOrBundle(ctx context.Context, pageURL string, appID string) (string, string) {
 	html, err := fetchHTML(ctx, pageURL)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 
 	ver := extractVersionFromHTML(html, appID)
-	if ver != "" {
-		return ver
+	resolvedURL := ""
+
+	// We must scan for the download URL in the page HTML or JS scripts.
+	// We want the linux-x64 tar.gz exact href.
+	extractResolvedURL := func(content string) string {
+		var p *regexp.Regexp
+		if appID == "antigravity-ide" {
+			p = regexp.MustCompile(`href="([^"]+linux-x64[^"]+Antigravity%20IDE\.tar\.gz)"`)
+		} else if appID == "antigravity-hub" {
+			p = regexp.MustCompile(`href="([^"]+linux-x64[^"]+Antigravity\.tar\.gz)"`)
+		} else {
+			return ""
+		}
+		if m := p.FindStringSubmatch(content); len(m) > 1 {
+			return m[1]
+		}
+		return ""
+	}
+
+	// Maybe it's directly in the HTML
+	if url := extractResolvedURL(html); url != "" {
+		resolvedURL = url
 	}
 
 	// Scan page HTML for Astro scripts (/_astro/*.js) and check their contents
 	scriptRegex := regexp.MustCompile(`/_astro/[^"]+\.js`)
 	scripts := scriptRegex.FindAllString(html, -1)
-
 	baseURL := "https://antigravity.google"
+
 	for _, scriptPath := range scripts {
 		fullScriptURL := baseURL + scriptPath
 		jsContent, err := fetchHTML(ctx, fullScriptURL)
 		if err != nil {
 			continue
 		}
+
 		if scriptVer := extractVersionFromHTML(jsContent, appID); scriptVer != "" {
-			return scriptVer
+			ver = scriptVer
+		}
+		if resolvedURL == "" {
+			if url := extractResolvedURL(jsContent); url != "" {
+				resolvedURL = url
+			}
 		}
 	}
 
-	return ""
+	return ver, resolvedURL
 }
 
 // fetchLatestRelease coordinates scraping HTML pages, Astro JS scripts, HEAD redirects, and defaults.
@@ -246,13 +280,34 @@ func fetchLatestRelease(
 		version     string
 		etag        string
 		downloadURL string
+		resolvedURL string
+		expectedSHA string
 	}
 
 	payload, err := retry.DoWithValue(ctx,
 		func(ctx context.Context) (fetchPayload, error) {
+			// CLI API Strategy
+			if spec.ID == "agy" && strings.HasSuffix(spec.DownloadURLTemplate, ".json") {
+				respJSON, err := fetchHTML(ctx, spec.DownloadURLTemplate)
+				if err == nil {
+					var m struct {
+						Version string `json:"version"`
+						URL     string `json:"url"`
+						SHA512  string `json:"sha512"`
+					}
+					if err := jsonutil.Unmarshal([]byte(respJSON), &m); err == nil && m.Version != "" {
+						return fetchPayload{
+							version:     "v" + strings.TrimPrefix(m.Version, "v"),
+							resolvedURL: m.URL,
+							expectedSHA: m.SHA512,
+						}, nil
+					}
+				}
+			}
+
 			// Strategy 1: Scrape ChangelogURL (primary source for CLI versions)
 			if spec.ChangelogURL != "" {
-				if ver := scrapePageOrBundle(ctx, spec.ChangelogURL, spec.ID); ver != "" {
+				if ver, resURL := scrapePageOrBundle(ctx, spec.ChangelogURL, spec.ID); ver != "" {
 					dlURL := spec.DownloadURLTemplate
 					if strings.Contains(dlURL, "{version}") {
 						dlURL = strings.ReplaceAll(dlURL, "{version}", ver)
@@ -260,20 +315,23 @@ func fetchLatestRelease(
 					return fetchPayload{
 						version:     ver,
 						downloadURL: dlURL,
+						resolvedURL: resURL,
 					}, nil
 				}
 			}
 
 			// Strategy 2: Scrape ReleasesPageURL (primary source for IDE & Hub versions)
 			if spec.ReleasesPageURL != "" {
-				if ver := scrapePageOrBundle(ctx, spec.ReleasesPageURL, spec.ID); ver != "" {
+				if ver, resURL := scrapePageOrBundle(ctx, spec.ReleasesPageURL, spec.ID); ver != "" {
 					dlURL := spec.DownloadURLTemplate
 					if strings.Contains(dlURL, "{version}") {
 						dlURL = strings.ReplaceAll(dlURL, "{version}", ver)
 					}
+
 					return fetchPayload{
 						version:     ver,
 						downloadURL: dlURL,
+						resolvedURL: resURL,
 					}, nil
 				}
 			}
@@ -325,15 +383,22 @@ func fetchLatestRelease(
 		dlURL = spec.DownloadURLTemplate
 	}
 
+	resURL := payload.resolvedURL
+	if resURL == "" {
+		resURL = dlURL
+	}
+
 	cr := CheckResult{
-		AppID:         spec.ID,
-		AppName:       spec.Name,
-		LocalVersion:  localEntry.InstalledVersion,
-		RemoteVersion: payload.version,
-		ETag:          payload.etag,
-		DownloadURL:   dlURL,
-		NeedsUpdate:   payload.version != localEntry.InstalledVersion,
-		NotInstalled:  localEntry.InstalledVersion == "",
+		AppID:          spec.ID,
+		AppName:        spec.Name,
+		LocalVersion:   localEntry.InstalledVersion,
+		RemoteVersion:  payload.version,
+		ETag:           payload.etag,
+		DownloadURL:    dlURL,
+		ResolvedURL:    resURL,
+		ExpectedSHA512: payload.expectedSHA,
+		NeedsUpdate:    payload.version != localEntry.InstalledVersion,
+		NotInstalled:   localEntry.InstalledVersion == "",
 	}
 
 	slog.Info("checker: version check complete",

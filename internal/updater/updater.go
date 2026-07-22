@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -42,6 +43,12 @@ type AppUpdateSummary struct {
 
 	// NewVersion is the version installed by this run.
 	NewVersion string
+
+	// ResolvedURL is the final, dynamic direct download URL used for the update.
+	ResolvedURL string
+
+	// ExpectedSHA512 is the expected SHA512 hash of the payload, if provided.
+	ExpectedSHA512 string
 
 	// Success is true when the update completed without errors.
 	Success bool
@@ -108,9 +115,11 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 			baseName := filepath.Base(cleanName)
 			var destPath string
 
+			isMainBinary := baseName == spec.BinaryName || (spec.ID == "agy" && baseName == "antigravity")
+
 			// The primary binary goes to ~/.local/bin/; everything else to dataDir.
-			if baseName == spec.BinaryName {
-				destPath = filepath.Join(binDir, baseName)
+			if isMainBinary {
+				destPath = filepath.Join(binDir, spec.BinaryName)
 			} else {
 				destPath = filepath.Join(dataDir, cleanName)
 				// Ensure parent directory exists.
@@ -132,7 +141,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 			outFile.Close()
 
 			// Apply execute permission to the main binary.
-			if baseName == spec.BinaryName {
+			if isMainBinary {
 				if err := os.Chmod(destPath, 0755); err != nil {
 					return fmt.Errorf("updater: chmod %q: %w", destPath, err)
 				}
@@ -180,6 +189,9 @@ func Update(
 
 	cr, _ := checkResult.Unwrap()
 
+	summary.ResolvedURL = cr.ResolvedURL
+	summary.ExpectedSHA512 = cr.ExpectedSHA512
+
 	// Persist the fresh ETag even on a skip so future runs benefit from caching.
 	_ = manifest.MarkChecked(m, spec.ID, cr.ETag)
 
@@ -199,13 +211,13 @@ func Update(
 		"app_id", spec.ID,
 		"old_version", cr.LocalVersion,
 		"new_version", cr.RemoteVersion,
-		"download_url", cr.DownloadURL,
+		"download_url", cr.ResolvedURL,
 		"force", force,
 	)
 
 	// --- Step 3: Download tarball ---
-	tarGzPath, err := DownloadTarGz(ctx, cr.DownloadURL, spec.ID, maxRetries)
-	if err != nil && spec.FallbackURLTemplate != "" && ctx.Err() == nil {
+	res := DownloadTarGz(ctx, cr.ResolvedURL, spec.ID, cr.ExpectedSHA512, maxRetries)
+	if res.IsErr() && spec.FallbackURLTemplate != "" && ctx.Err() == nil {
 		// Attempt fallback download URL if primary URL returned error
 		fallbackURL := spec.FallbackURLTemplate
 		if strings.Contains(fallbackURL, "{version}") {
@@ -213,13 +225,14 @@ func Update(
 		}
 		slog.Info("updater: primary download endpoint failed, trying fallback URL",
 			"app_id", spec.ID,
-			"primary_error", err,
+			"primary_error", res.Error(),
 			"fallback_url", fallbackURL,
 		)
-		tarGzPath, err = DownloadTarGz(ctx, fallbackURL, spec.ID, maxRetries)
+		res = DownloadTarGz(ctx, fallbackURL, spec.ID, "", maxRetries)
 	}
 
-	if err != nil {
+	if res.IsErr() {
+		err := res.Error()
 		if ctx.Err() != nil {
 			summary.Error = fmt.Errorf("updater: download cancelled for %s", spec.ID)
 		} else {
@@ -231,6 +244,7 @@ func Update(
 		)
 		return result.Err[AppUpdateSummary](summary.Error)
 	}
+	tarGzPath, _ := res.Unwrap()
 	defer os.Remove(tarGzPath)
 
 	// --- Step 4: Extract and install ---
@@ -257,7 +271,23 @@ func Update(
 		}
 	}
 
-	// --- Step 6: Persist manifest ---
+	// --- Step 6: Post-Install Hook ---
+	if spec.ID == "agy" {
+		binDir, _ := xdg.BinDir()
+		agyPath := filepath.Join(binDir, spec.BinaryName)
+		cmd := exec.CommandContext(ctx, agyPath, "install")
+		cmd.Env = append(os.Environ(), "AGY_NO_INTERACTIVE=1") // typically a good idea for headless
+		if err := cmd.Run(); err != nil {
+			slog.Warn("updater: agy post-install hook failed",
+				"app_id", spec.ID,
+				"error", err,
+			)
+		} else {
+			slog.Info("updater: agy post-install hook completed successfully")
+		}
+	}
+
+	// --- Step 7: Persist manifest ---
 	if err := manifest.MarkInstalled(m, spec.ID, cr.RemoteVersion, cr.ETag); err != nil {
 		slog.Warn("updater: manifest update failed",
 			"app_id", spec.ID,

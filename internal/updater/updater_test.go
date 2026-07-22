@@ -71,10 +71,11 @@ func TestDownloadTarGz_Success(t *testing.T) {
 	defer ts.Close()
 
 	ctx := context.Background()
-	path, err := DownloadTarGz(ctx, ts.URL+"/download", "agy", 1)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	res := DownloadTarGz(ctx, ts.URL+"/download", "agy", "", 1)
+	if res.IsErr() {
+		t.Fatalf("unexpected error: %v", res.Error())
 	}
+	path, _ := res.Unwrap()
 	defer os.Remove(path)
 
 	content, err := os.ReadFile(path)
@@ -98,10 +99,11 @@ func TestDownloadTarGz_NetworkFailureFallback(t *testing.T) {
 	defer ts.Close()
 
 	ctx := context.Background()
-	path, err := DownloadTarGz(ctx, ts.URL+"/download", "agy", 1)
-	if err != nil {
-		t.Fatalf("unexpected error on fallback: %v", err)
+	res := DownloadTarGz(ctx, ts.URL+"/download", "agy", "", 1)
+	if res.IsErr() {
+		t.Fatalf("unexpected error on fallback: %v", res.Error())
 	}
+	path, _ := res.Unwrap()
 	defer os.Remove(path)
 
 	// Since 404 triggers createLocalPackage, we verify it created a tarball.
@@ -143,13 +145,15 @@ func TestDownloadTarGz_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	path, err := DownloadTarGz(ctx, ts.URL+"/download", "agy", 1)
-	if err == nil {
+	res := DownloadTarGz(ctx, ts.URL+"/download", "agy", "", 1)
+	if !res.IsErr() {
+		path, _ := res.Unwrap()
 		defer os.Remove(path)
 		t.Fatalf("expected error due to context cancellation, got nil")
 	}
 
 	// Verify the temp file doesn't exist
+	path, _ := res.Unwrap()
 	if path != "" {
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Errorf("temp file %q was not removed after context cancellation", path)
