@@ -1,0 +1,11 @@
+# Binaries
+ag-up
+*.exe
+*.exe.exe
+*.dll
+*.so
+*.dylib
+
+# Temporary files
+*.tmp
+*.log
