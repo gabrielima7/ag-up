@@ -246,7 +246,12 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 				}
 			}
 
-			outFile, err := os.Create(destPath)
+			// Preserve the exact file mode from the tar header.
+			// os.Create hardcodes 0666 and silently drops execute bits on auxiliary
+			// binaries (e.g. resources/bin/language_server). Using os.OpenFile with
+			// the header's mode followed by an explicit os.Chmod bypasses umask too.
+			fileMode := hdr.FileInfo().Mode()
+			outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
 			if err != nil {
 				return fmt.Errorf("updater: create %q: %w", destPath, err)
 			}
@@ -258,11 +263,12 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 			}
 			outFile.Close()
 
-			// Apply execute permission to the main binary.
+			// Explicit chmod after write — safety net against umask stripping +x.
+			if err := os.Chmod(destPath, fileMode); err != nil {
+				return fmt.Errorf("updater: chmod %q: %w", destPath, err)
+			}
+
 			if baseName == spec.BinaryName {
-				if err := os.Chmod(destPath, 0755); err != nil {
-					return fmt.Errorf("updater: chmod %q: %w", destPath, err)
-				}
 				slog.Info("updater: installed binary",
 					"app_id", spec.ID,
 					"path", destPath,
