@@ -3,15 +3,12 @@
 // This file isolates all network download logic from the extract-and-install
 // pipeline. It enforces:
 //   - Context-aware HTTP requests (respects cancellation from Ctrl-C / SIGTERM).
-//   - Immediate defer os.Remove registration on every temp file created.
+//   - Immediate defer cleanup registration on every temp file created.
 //   - Retry with exponential backoff + jitter via GopherCore retry package.
-//   - Fast failure on non-retryable HTTP 4xx responses (404, 403) with local release fallback.
-//   - Path sanitisation via GopherCore guard package.
+//   - Fast failure on non-retryable HTTP 4xx responses (404, 403).
 package updater
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -24,7 +21,6 @@ import (
 
 	"github.com/gabrielima7/GopherCore/guard"
 	"github.com/gabrielima7/GopherCore/retry"
-	"github.com/gabrielima7/ag-up/internal/config"
 )
 
 // userAgent is the HTTP User-Agent header sent on all outbound requests.
@@ -46,50 +42,9 @@ func isNonRetryableError(err error) bool {
 		strings.Contains(errStr, "HTTP 401")
 }
 
-// createLocalPackage constructs a valid .tar.gz bundle containing an executable
-// binary for appID, enabling local installation when remote mirrors return 404.
-func createLocalPackage(tmpPath, appID string) error {
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return fmt.Errorf("create local package file: %w", err)
-	}
-	defer f.Close()
-
-	gw := gzip.NewWriter(f)
-	defer gw.Close()
-
-	tw := tar.NewWriter(gw)
-	defer tw.Close()
-
-	spec, found := config.ByID(appID)
-	binName := appID
-	appName := appID
-	if found {
-		binName = spec.BinaryName
-		appName = spec.Name
-	}
-
-	content := fmt.Sprintf("#!/bin/sh\necho \"%s v2.3.1 (installed via ag-up v0.1.0)\"\n", appName)
-	hdr := &tar.Header{
-		Name:    binName,
-		Mode:    0755,
-		Size:    int64(len(content)),
-		ModTime: time.Now(),
-	}
-
-	if err := tw.WriteHeader(hdr); err != nil {
-		return fmt.Errorf("write tar header: %w", err)
-	}
-	if _, err := tw.Write([]byte(content)); err != nil {
-		return fmt.Errorf("write tar body: %w", err)
-	}
-
-	return nil
-}
-
 // DownloadTarGz fetches the tarball at rawURL and writes it to a uniquely
-// named temporary file under os.TempDir(). If remote mirror returns 404, it
-// falls back to constructing a valid local release package so updates succeed.
+// named temporary file under os.TempDir(). Returns the path to the temp file
+// on success; the caller is responsible for removing it (via defer os.Remove).
 func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (string, error) {
 	// Sanitise inputs through guard to strip null bytes and control characters.
 	safeURL := guard.SanitizeString(rawURL)
@@ -178,18 +133,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 		}),
 	)
 
-	// Fallback to local package generation if HTTP 404/403 occurred on remote mirror (and not cancelled)
 	if err != nil {
-		if ctx.Err() == nil && isNonRetryableError(err) {
-			slog.Info("downloader: remote mirror endpoint returned 404, creating local release package",
-				"app_id", appID,
-				"url", safeURL,
-			)
-			if pkgErr := createLocalPackage(tmpPath, appID); pkgErr == nil {
-				removeOnExit = false
-				return tmpPath, nil
-			}
-		}
 		return "", err
 	}
 

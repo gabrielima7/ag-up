@@ -1,11 +1,18 @@
 // Package checker performs remote version checks for Antigravity applications.
-// It scrapes official Antigravity web pages (https://antigravity.google/releases and
-// https://antigravity.google/changelog) using regex matching over HTML panels and
-// linked Astro JavaScript bundles, falling back to HTTP HEAD redirect inspection.
+//
+// Two resolution strategies are supported, dispatched per-AppSpec:
+//
+//  1. CLI (agy): Fetches the Cloud Run JSON manifest from ManifestURL.
+//     Returns version, direct download URL, and SHA-512 checksum.
+//
+//  2. IDE / Hub: Fetches the HTML download page at WebReleasePage, locates
+//     the <section id=SectionID> block, extracts the linux-x64 .tar.gz href,
+//     and derives the SemVer tag directly from the URL path.
 package checker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,16 +31,6 @@ import (
 const defaultHTTPTimeout = 15 * time.Second
 const userAgent = "ag-up/v0.1.0"
 
-// Known latest release defaults matching the official antigravity.google site:
-// - Antigravity CLI (agy): v1.1.5
-// - Antigravity IDE: v2.1.1
-// - Antigravity Hub (2.0): v2.3.1
-var defaultWebVersions = map[string]string{
-	"agy":             "v1.1.5",
-	"antigravity-ide": "v2.1.1",
-	"antigravity-hub": "v2.3.1",
-}
-
 // CheckResult carries the outcome of a single remote version check.
 type CheckResult struct {
 	// AppID matches config.AppSpec.ID.
@@ -45,14 +42,18 @@ type CheckResult struct {
 	// LocalVersion is the currently installed version from the manifest.
 	LocalVersion string
 
-	// RemoteVersion is the latest version string scraped from antigravity.google.
+	// RemoteVersion is the latest version string scraped from the remote source.
 	RemoteVersion string
 
-	// ETag is the HTTP ETag or Last-Modified header from HEAD request.
+	// ETag is the HTTP ETag or Last-Modified header from HEAD request (may be empty).
 	ETag string
 
-	// DownloadURL is the resolved direct download URL.
-	DownloadURL string
+	// ResolvedURL is the direct .tar.gz download URL resolved from the remote source.
+	ResolvedURL string
+
+	// ExpectedSHA512 is the hex-encoded SHA-512 checksum from the manifest (CLI only).
+	// Empty string means no checksum validation is required.
+	ExpectedSHA512 string
 
 	// NeedsUpdate is true when RemoteVersion differs from LocalVersion.
 	NeedsUpdate bool
@@ -62,9 +63,50 @@ type CheckResult struct {
 }
 
 // client is a shared HTTP client with a configured timeout.
+// Note: Accept-Encoding is NOT set manually so Go's transport handles
+// transparent gzip decompression for compressed responses.
 var client = &http.Client{Timeout: defaultHTTPTimeout}
 
-// fetchHTML attempts to GET the given URL and return its body content as string.
+// cliManifest is the JSON structure returned by the Cloud Run auto-updater.
+type cliManifest struct {
+	Version string `json:"version"`
+	URL     string `json:"url"`
+	SHA512  string `json:"sha512"`
+}
+
+// fetchJSON performs a GET request and decodes the JSON body into dest.
+func fetchJSON(ctx context.Context, url string, dest interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("checker: build request for %q: %w", url, err)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("checker: GET %q: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("checker: GET %q returned status %d", url, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
+	if err != nil {
+		return fmt.Errorf("checker: read body from %q: %w", url, err)
+	}
+
+	if err := json.Unmarshal(body, dest); err != nil {
+		return fmt.Errorf("checker: decode JSON from %q: %w", url, err)
+	}
+	return nil
+}
+
+// fetchHTML performs a GET request and returns the response body as a string.
+// Accept-Encoding is intentionally omitted so Go's http.Transport automatically
+// decompresses gzip responses from antigravity.google/download.
 func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
@@ -72,7 +114,6 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	}
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -84,7 +125,7 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 		return "", fmt.Errorf("checker: GET %q returned status %d", pageURL, resp.StatusCode)
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		return "", fmt.Errorf("checker: read body from %q: %w", pageURL, err)
 	}
@@ -92,215 +133,133 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	return string(bodyBytes), nil
 }
 
-// extractVersionFromHTML applies precise tab/panel and JS bundle regex patterns to locate
-// the exact version for each application (CLI -> 1.1.5, IDE -> 2.1.1, Hub/2.0 -> 2.3.1).
-func extractVersionFromHTML(htmlContent string, appID string) string {
-	switch appID {
-	case "agy":
-		// Strategy A: Scrape CLI tab panel from changelog HTML (<div class="grid-body" data-list-panel="cli">...<p>1.1.5</p>)
-		p1 := regexp.MustCompile(`data-list-panel="cli"[\s\S]*?<p[^>]*>\s*v?(\d+\.\d+\.\d+)`)
-		if m := p1.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-		p2 := regexp.MustCompile(`(?i)Antigravity\s+CLI[\s\S]*?<p[^>]*>\s*v?(\d+\.\d+\.\d+)`)
-		if m := p2.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-
-	case "antigravity-ide":
-		// Strategy A: Scrape IDE JS bundle array c=[{version:`2.1.1`}] or IDE tab panel
-		p1 := regexp.MustCompile(`c=\[\{version:` + "`" + `v?(\d+\.\d+\.\d+)`)
-		if m := p1.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-		p2 := regexp.MustCompile(`data-list-panel="ide"[\s\S]*?<p[^>]*>\s*v?(\d+\.\d+\.\d+)`)
-		if m := p2.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-		p3 := regexp.MustCompile(`(?i)Antigravity\s+IDE[\s\S]*?v?(\d+\.\d+\.\d+)`)
-		if m := p3.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-
-	case "antigravity-hub":
-		// Strategy A: Scrape Antigravity 2.0 JS bundle array s=[{version:`2.3.1`}] or 2.0 tab panel
-		p1 := regexp.MustCompile(`s=\[\{version:` + "`" + `v?(\d+\.\d+\.\d+)`)
-		if m := p1.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-		p2 := regexp.MustCompile(`data-list-panel="(?:2\.0|hub)"[\s\S]*?<p[^>]*>\s*v?(\d+\.\d+\.\d+)`)
-		if m := p2.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
-		p3 := regexp.MustCompile(`(?i)Antigravity\s+2\.0[\s\S]*?v?(\d+\.\d+\.\d+)`)
-		if m := p3.FindStringSubmatch(htmlContent); len(m) > 1 {
-			return "v" + strings.TrimPrefix(m[1], "v")
-		}
+// fetchCLIManifest fetches the Cloud Run JSON manifest for the CLI app and
+// returns the resolved CheckResult payload (version, download URL, SHA-512).
+func fetchCLIManifest(ctx context.Context, spec config.AppSpec, localEntry manifest.AppEntry) (CheckResult, error) {
+	var m cliManifest
+	if err := fetchJSON(ctx, spec.ManifestURL, &m); err != nil {
+		return CheckResult{}, fmt.Errorf("cli manifest: %w", err)
 	}
 
-	return ""
+	if m.Version == "" || m.URL == "" {
+		return CheckResult{}, fmt.Errorf("cli manifest: missing version or url in response")
+	}
+
+	remoteVersion := "v" + strings.TrimPrefix(m.Version, "v")
+
+	cr := CheckResult{
+		AppID:          spec.ID,
+		AppName:        spec.Name,
+		LocalVersion:   localEntry.InstalledVersion,
+		RemoteVersion:  remoteVersion,
+		ResolvedURL:    m.URL,
+		ExpectedSHA512: m.SHA512,
+		NeedsUpdate:    remoteVersion != localEntry.InstalledVersion,
+		NotInstalled:   localEntry.InstalledVersion == "",
+	}
+
+	slog.Info("checker: cli manifest resolved",
+		"app_id", spec.ID,
+		"remote_version", remoteVersion,
+		"download_url", m.URL,
+		"sha512_present", m.SHA512 != "",
+	)
+
+	return cr, nil
 }
 
-// fetchVersionFromHEAD performs an HTTP HEAD request on the direct download URL,
-// follows redirects to inspect the final filename or Location header, and extracts version.
-func fetchVersionFromHEAD(ctx context.Context, downloadURL string) (version string, etag string, finalURL string, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, downloadURL, nil)
-	if err != nil {
-		return "", "", "", fmt.Errorf("build HEAD request: %w", err)
-	}
-	req.Header.Set("User-Agent", userAgent)
+// semverFromURL extracts the first SemVer tag (vX.Y.Z or X.Y.Z) found in a URL string.
+// The version is embedded in path segments like ".../2.3.1-5358163105546240/...".
+var semverRe = regexp.MustCompile(`/(\d+\.\d+\.\d+)-\d+/`)
 
-	var redirectedURL string
-	headClient := &http.Client{
-		Timeout: defaultHTTPTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			redirectedURL = req.URL.String()
-			if len(via) >= 10 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
+// scrapeDownloadPage fetches the HTML download page for IDE or Hub, finds the
+// linux-x64 .tar.gz href within the app's designated <section id=SectionID>,
+// and extracts the SemVer tag from the URL path.
+func scrapeDownloadPage(ctx context.Context, spec config.AppSpec, localEntry manifest.AppEntry) (CheckResult, error) {
+	html, err := fetchHTML(ctx, spec.WebReleasePage)
+	if err != nil {
+		return CheckResult{}, fmt.Errorf("scrape download page: %w", err)
 	}
 
-	resp, err := headClient.Do(req)
-	if err != nil {
-		reqGET, errGET := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
-		if errGET != nil {
-			return "", "", "", fmt.Errorf("HEAD and GET requests failed for %q: %w", downloadURL, err)
+	// Locate the section for this specific app by finding id="<SectionID>"
+	// and then slicing up to the next </section> tag.
+	// We use strings.Index to avoid RE2's repeat-count limit.
+	anchor := fmt.Sprintf(`id="%s"`, spec.SectionID)
+	sectionMatch := html
+	if startIdx := strings.Index(html, anchor); startIdx >= 0 {
+		slice := html[startIdx:]
+		if endIdx := strings.Index(slice, "</section>"); endIdx >= 0 {
+			sectionMatch = slice[:endIdx+len("</section>")]
+		} else {
+			sectionMatch = slice
 		}
-		reqGET.Header.Set("User-Agent", userAgent)
-		reqGET.Header.Set("Range", "bytes=0-1024")
-
-		respGET, err2 := headClient.Do(reqGET)
-		if err2 != nil {
-			return "", "", "", fmt.Errorf("HEAD failed (%v) and GET range failed: %w", err, err2)
-		}
-		defer respGET.Body.Close()
-		resp = respGET
 	} else {
-		defer resp.Body.Close()
+		slog.Warn("checker: section anchor not found, searching whole page",
+			"app_id", spec.ID,
+			"section_id", spec.SectionID,
+		)
 	}
 
-	etag = resp.Header.Get("ETag")
-	if etag == "" {
-		etag = resp.Header.Get("Last-Modified")
+	// Within the section, find the linux-x64 .tar.gz href.
+	var hrefRe *regexp.Regexp
+	switch spec.SectionID {
+	case "antigravity-ide":
+		// edgedl.me.gvt1.com/.../linux-x64/Antigravity%20IDE.tar.gz
+		hrefRe = regexp.MustCompile(`href="(https://edgedl\.me\.gvt1\.com/[^"]*linux-x64/Antigravity(?:%20IDE)?\.tar\.gz)"`)
+	default:
+		// storage.googleapis.com/.../linux-x64/Antigravity.tar.gz  (Hub / antigravity-2)
+		hrefRe = regexp.MustCompile(`href="(https://storage\.googleapis\.com/[^"]*linux-x64/Antigravity\.tar\.gz)"`)
 	}
 
-	targetURL := resp.Request.URL.String()
-	if redirectedURL != "" {
-		targetURL = redirectedURL
+	hrefMatch := hrefRe.FindStringSubmatch(sectionMatch)
+	if len(hrefMatch) < 2 {
+		return CheckResult{}, fmt.Errorf("scrape download page: linux-x64 tar.gz link not found in section %q", spec.SectionID)
 	}
-	if loc := resp.Header.Get("Location"); loc != "" {
-		targetURL = loc
+	resolvedURL := hrefMatch[1]
+
+	// Extract SemVer from the URL path segment (e.g. "2.3.1-5358163105546240").
+	verMatch := semverRe.FindStringSubmatch(resolvedURL)
+	if len(verMatch) < 2 {
+		return CheckResult{}, fmt.Errorf("scrape download page: could not extract version from URL %q", resolvedURL)
+	}
+	remoteVersion := "v" + verMatch[1]
+
+	cr := CheckResult{
+		AppID:         spec.ID,
+		AppName:       spec.Name,
+		LocalVersion:  localEntry.InstalledVersion,
+		RemoteVersion: remoteVersion,
+		ResolvedURL:   resolvedURL,
+		NeedsUpdate:   remoteVersion != localEntry.InstalledVersion,
+		NotInstalled:  localEntry.InstalledVersion == "",
 	}
 
-	verRegex := regexp.MustCompile(`v?(\d+\.\d+\.\d+(?:-[a-zA-Z0-9\.]+)?)`)
-	matches := verRegex.FindStringSubmatch(targetURL)
-	if len(matches) > 1 {
-		version = "v" + strings.TrimPrefix(matches[1], "v")
-		return version, etag, targetURL, nil
-	}
+	slog.Info("checker: html page scraped",
+		"app_id", spec.ID,
+		"section_id", spec.SectionID,
+		"remote_version", remoteVersion,
+		"download_url", resolvedURL,
+	)
 
-	return "", etag, targetURL, fmt.Errorf("could not extract version from redirect URL %q", targetURL)
+	return cr, nil
 }
 
-// scrapePageOrBundle fetches an HTML page and any linked Astro JS scripts to extract app version.
-func scrapePageOrBundle(ctx context.Context, pageURL string, appID string) string {
-	html, err := fetchHTML(ctx, pageURL)
-	if err != nil {
-		return ""
-	}
-
-	ver := extractVersionFromHTML(html, appID)
-	if ver != "" {
-		return ver
-	}
-
-	// Scan page HTML for Astro scripts (/_astro/*.js) and check their contents
-	scriptRegex := regexp.MustCompile(`/_astro/[^"]+\.js`)
-	scripts := scriptRegex.FindAllString(html, -1)
-
-	baseURL := "https://antigravity.google"
-	for _, scriptPath := range scripts {
-		fullScriptURL := baseURL + scriptPath
-		jsContent, err := fetchHTML(ctx, fullScriptURL)
-		if err != nil {
-			continue
-		}
-		if scriptVer := extractVersionFromHTML(jsContent, appID); scriptVer != "" {
-			return scriptVer
-		}
-	}
-
-	return ""
-}
-
-// fetchLatestRelease coordinates scraping HTML pages, Astro JS scripts, HEAD redirects, and defaults.
+// fetchLatestRelease dispatches to the correct resolution strategy based on AppSpec fields.
 func fetchLatestRelease(
 	ctx context.Context,
 	spec config.AppSpec,
 	localEntry manifest.AppEntry,
 	maxRetries int,
 ) result.Result[CheckResult] {
-	type fetchPayload struct {
-		version     string
-		etag        string
-		downloadURL string
-	}
-
-	payload, err := retry.DoWithValue(ctx,
-		func(ctx context.Context) (fetchPayload, error) {
-			// Strategy 1: Scrape ChangelogURL (primary source for CLI versions)
-			if spec.ChangelogURL != "" {
-				if ver := scrapePageOrBundle(ctx, spec.ChangelogURL, spec.ID); ver != "" {
-					dlURL := spec.DownloadURLTemplate
-					if strings.Contains(dlURL, "{version}") {
-						dlURL = strings.ReplaceAll(dlURL, "{version}", ver)
-					}
-					return fetchPayload{
-						version:     ver,
-						downloadURL: dlURL,
-					}, nil
-				}
+	cr, err := retry.DoWithValue(ctx,
+		func(ctx context.Context) (CheckResult, error) {
+			if spec.ManifestURL != "" {
+				return fetchCLIManifest(ctx, spec, localEntry)
 			}
-
-			// Strategy 2: Scrape ReleasesPageURL (primary source for IDE & Hub versions)
-			if spec.ReleasesPageURL != "" {
-				if ver := scrapePageOrBundle(ctx, spec.ReleasesPageURL, spec.ID); ver != "" {
-					dlURL := spec.DownloadURLTemplate
-					if strings.Contains(dlURL, "{version}") {
-						dlURL = strings.ReplaceAll(dlURL, "{version}", ver)
-					}
-					return fetchPayload{
-						version:     ver,
-						downloadURL: dlURL,
-					}, nil
-				}
+			if spec.WebReleasePage != "" {
+				return scrapeDownloadPage(ctx, spec, localEntry)
 			}
-
-			// Strategy 3 (Fallback): HTTP HEAD request on direct download URL
-			dlURL := spec.DownloadURLTemplate
-			if strings.Contains(dlURL, "{version}") && localEntry.InstalledVersion != "" {
-				dlURL = strings.ReplaceAll(dlURL, "{version}", localEntry.InstalledVersion)
-			}
-			ver, etag, finalURL, headErr := fetchVersionFromHEAD(ctx, dlURL)
-			if headErr == nil && ver != "" {
-				return fetchPayload{
-					version:     ver,
-					etag:        etag,
-					downloadURL: finalURL,
-				}, nil
-			}
-
-			// Strategy 4 (Website Default Mapping Fallback): Use official site version mapping
-			if defaultVer, ok := defaultWebVersions[spec.ID]; ok {
-				return fetchPayload{
-					version:     defaultVer,
-					downloadURL: spec.DownloadURLTemplate,
-				}, nil
-			}
-
-			return fetchPayload{}, fmt.Errorf("checker: unable to extract version for %q from web pages or HEAD redirect (HEAD err: %v)", spec.ID, headErr)
+			return CheckResult{}, fmt.Errorf("checker: AppSpec %q has no ManifestURL or WebReleasePage configured", spec.ID)
 		},
 		retry.WithMaxAttempts(maxRetries),
 		retry.WithInitialDelay(500*time.Millisecond),
@@ -318,22 +277,6 @@ func fetchLatestRelease(
 			"error", err,
 		)
 		return result.Err[CheckResult](fmt.Errorf("checker: %s: %w", spec.ID, err))
-	}
-
-	dlURL := payload.downloadURL
-	if dlURL == "" {
-		dlURL = spec.DownloadURLTemplate
-	}
-
-	cr := CheckResult{
-		AppID:         spec.ID,
-		AppName:       spec.Name,
-		LocalVersion:  localEntry.InstalledVersion,
-		RemoteVersion: payload.version,
-		ETag:          payload.etag,
-		DownloadURL:   dlURL,
-		NeedsUpdate:   payload.version != localEntry.InstalledVersion,
-		NotInstalled:  localEntry.InstalledVersion == "",
 	}
 
 	slog.Info("checker: version check complete",
