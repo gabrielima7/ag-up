@@ -183,29 +183,36 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 
 // extractAndInstall extracts a .tar.gz archive and installs all files to the
 // appropriate XDG directories for GUI apps (IDE and Hub).
-func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
+// It returns the absolute path to the main application binary found inside the
+// tarball (the executable named "antigravity"), which the caller uses to create
+// the ~/.local/bin/<app-id> symlink. Returns an empty string if not found.
+func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	binDir, err := xdg.BinDir()
 	if err != nil {
-		return fmt.Errorf("updater: resolve bin dir: %w", err)
+		return "", fmt.Errorf("updater: resolve bin dir: %w", err)
 	}
 	dataDir, err := xdg.DataDir(spec.ID)
 	if err != nil {
-		return fmt.Errorf("updater: resolve data dir: %w", err)
+		return "", fmt.Errorf("updater: resolve data dir: %w", err)
 	}
 
 	f, err := os.Open(tarGzPath)
 	if err != nil {
-		return fmt.Errorf("updater: open tarball %q: %w", tarGzPath, err)
+		return "", fmt.Errorf("updater: open tarball %q: %w", tarGzPath, err)
 	}
 	defer f.Close()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
-		return fmt.Errorf("updater: gzip reader: %w", err)
+		return "", fmt.Errorf("updater: gzip reader: %w", err)
 	}
 	defer gz.Close()
 
 	tr := tar.NewReader(gz)
+
+	// actualBinaryPath tracks the installed path of the main GUI executable
+	// (the entry named "antigravity" with execute permissions).
+	var actualBinaryPath string
 
 	for {
 		hdr, err := tr.Next()
@@ -213,7 +220,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("updater: read tar entry: %w", err)
+			return "", fmt.Errorf("updater: read tar entry: %w", err)
 		}
 
 		// Sanitise the path to prevent directory traversal attacks.
@@ -228,7 +235,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 			// Create sub-directories inside dataDir.
 			dirPath := filepath.Join(dataDir, cleanName)
 			if err := os.MkdirAll(dirPath, 0755); err != nil {
-				return fmt.Errorf("updater: mkdir %q: %w", dirPath, err)
+				return "", fmt.Errorf("updater: mkdir %q: %w", dirPath, err)
 			}
 
 		case tar.TypeReg:
@@ -242,7 +249,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 				destPath = filepath.Join(dataDir, cleanName)
 				// Ensure parent directory exists.
 				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
-					return fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
+					return "", fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
 				}
 			}
 
@@ -253,19 +260,19 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 			fileMode := hdr.FileInfo().Mode()
 			outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
 			if err != nil {
-				return fmt.Errorf("updater: create %q: %w", destPath, err)
+				return "", fmt.Errorf("updater: create %q: %w", destPath, err)
 			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
 			if _, err := io.Copy(outFile, tr); err != nil {
 				outFile.Close()
-				return fmt.Errorf("updater: write %q: %w", destPath, err)
+				return "", fmt.Errorf("updater: write %q: %w", destPath, err)
 			}
 			outFile.Close()
 
 			// Explicit chmod after write — safety net against umask stripping +x.
 			if err := os.Chmod(destPath, fileMode); err != nil {
-				return fmt.Errorf("updater: chmod %q: %w", destPath, err)
+				return "", fmt.Errorf("updater: chmod %q: %w", destPath, err)
 			}
 
 			if baseName == spec.BinaryName {
@@ -274,10 +281,49 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) error {
 					"path", destPath,
 				)
 			}
+
+			// Track the main GUI entry point: the executable named "antigravity"
+			// (the Electron host binary used by both Hub and IDE).
+			if baseName == "antigravity" && fileMode&0111 != 0 && actualBinaryPath == "" {
+				actualBinaryPath = destPath
+			}
 		}
 	}
 
-	return nil
+	return actualBinaryPath, nil
+}
+
+// createGUISymlink atomically creates a symlink at ~/.local/bin/<app-id> pointing
+// to actualBinaryPath. Any pre-existing file or old symlink at that location is
+// removed first, making the operation idempotent and safe to run on every update.
+func createGUISymlink(binDir, appID, actualBinaryPath string) {
+	if actualBinaryPath == "" {
+		slog.Warn("updater: main binary not found during extraction, skipping symlink",
+			"app_id", appID,
+		)
+		return
+	}
+
+	symlinkPath := filepath.Join(binDir, appID)
+
+	// Remove any existing stub, dummy, or outdated symlink — ignore "not found".
+	_ = os.Remove(symlinkPath)
+
+	if err := os.Symlink(actualBinaryPath, symlinkPath); err != nil {
+		slog.Warn("updater: failed to create symlink",
+			"app_id", appID,
+			"symlink", symlinkPath,
+			"target", actualBinaryPath,
+			"error", err,
+		)
+		return
+	}
+
+	slog.Info("updater: symlink created",
+		"app_id", appID,
+		"symlink", symlinkPath,
+		"target", actualBinaryPath,
+	)
 }
 
 // runPostInstallHook executes `agy install` after placing the CLI binary.
@@ -404,12 +450,14 @@ func Update(
 
 	// --- Step 5: Extract and install (app-type-aware) ---
 	var installErr error
+	var actualBinaryPath string
 	if spec.TarballInnerName != "" {
 		// CLI path: extract only the named binary, rename to BinaryName.
 		installErr = extractCLI(tarGzPath, spec)
 	} else {
 		// IDE / Hub path: generic multi-file extraction.
-		installErr = extractAndInstall(tarGzPath, spec)
+		// Returns the detected path to the main Electron binary for symlink creation.
+		actualBinaryPath, installErr = extractAndInstall(tarGzPath, spec)
 	}
 
 	if installErr != nil {
@@ -421,12 +469,18 @@ func Update(
 		return result.Err[AppUpdateSummary](summary.Error)
 	}
 
-	// --- Step 6: Generate .desktop launcher for GUI apps ---
+	// --- Step 6: Generate .desktop launcher and terminal symlink for GUI apps ---
 	if spec.IsGUI {
 		binDir, binErr := xdg.BinDir()
 		if binErr == nil {
-			binaryPath := filepath.Join(binDir, spec.BinaryName)
-			if desktopErr := desktop.Generate(spec, binaryPath); desktopErr != nil {
+			// Create/replace ~/.local/bin/<app-id> → actual nested binary.
+			// This makes `antigravity-hub` / `antigravity-ide` available on PATH
+			// without any manual user intervention.
+			createGUISymlink(binDir, spec.ID, actualBinaryPath)
+
+			// The .desktop Exec= field points at the symlink for a clean launcher entry.
+			symlinkPath := filepath.Join(binDir, spec.ID)
+			if desktopErr := desktop.Generate(spec, symlinkPath); desktopErr != nil {
 				slog.Warn("updater: desktop file generation failed",
 					"app_id", spec.ID,
 					"error", desktopErr,
