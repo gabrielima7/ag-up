@@ -20,7 +20,6 @@
 //	ag-up --ide               # Update only the IDE
 //	ag-up --hub               # Update only the Hub
 //	ag-up --check             # Dry-run version check (no downloads)
-//	ag-up --force             # Force reinstall (ignore version match)
 //	ag-up --retries 5         # Set HTTP retry attempts (default: 3)
 //	ag-up --version           # Print ag-up version and exit
 package main
@@ -57,7 +56,6 @@ func main() {
 	flagIDE     := flag.Bool("ide", false, "Update only the Antigravity IDE")
 	flagHub     := flag.Bool("hub", false, "Update only the Antigravity Hub (2.0)")
 	flagCheck   := flag.Bool("check", false, "Dry-run: check versions without downloading")
-	flagForce   := flag.Bool("force", false, "Force re-download even if version matches")
 	flagRetries := flag.Int("retries", 3, "Maximum HTTP retry attempts per operation (1–10)")
 	flagVersion := flag.Bool("version", false, "Print ag-up version and exit")
 
@@ -71,7 +69,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  ag-up                    # Launch interactive menu\n")
 		fmt.Fprintf(os.Stderr, "  ag-up --check            # Check versions (no download)\n")
 		fmt.Fprintf(os.Stderr, "  ag-up --all              # Update everything concurrently\n")
-		fmt.Fprintf(os.Stderr, "  ag-up --cli --force      # Force reinstall the CLI\n")
+		fmt.Fprintf(os.Stderr, "  ag-up --cli              # Update only the CLI\n")
 		fmt.Fprintf(os.Stderr, "  ag-up --ide --retries 5  # Update IDE with 5 retries\n\n")
 	}
 
@@ -91,7 +89,7 @@ func main() {
 	// Initialise GopherCore structured logger (JSON output via log/slog).
 	// -----------------------------------------------------------------------
 	logkit.Initialize(
-		logkit.WithLevel(slog.LevelInfo),
+		logkit.WithLevel(slog.LevelWarn),
 	)
 
 	slog.Info("ag-up starting", "version", Version)
@@ -142,7 +140,7 @@ func main() {
 	nonInteractive := *flagAll || *flagCLI || *flagIDE || *flagHub || *flagCheck
 
 	if nonInteractive {
-		code := runFlagMode(ctx, &m, *flagAll, *flagCLI, *flagIDE, *flagHub, *flagCheck, *flagForce, maxRetries)
+		code := runFlagMode(ctx, &m, *flagAll, *flagCLI, *flagIDE, *flagHub, *flagCheck, maxRetries)
 		// If the context was cancelled (signal received), override the exit code.
 		if ctx.Err() != nil {
 			handleCancellation()
@@ -183,7 +181,7 @@ func handleCancellation() {
 func runFlagMode(
 	ctx context.Context,
 	m *manifest.Manifest,
-	all, cli, ide, hub, check, force bool,
+	all, cli, ide, hub, check bool,
 	maxRetries int,
 ) int {
 	exitCode := 0
@@ -229,12 +227,12 @@ func runFlagMode(
 
 	if len(specs) == 1 {
 		// Single update: call Update directly.
-		r := updater.Update(ctx, specs[0], m, force, maxRetries)
+		r := updater.Update(ctx, specs[0], m, maxRetries)
 		updateResults = []result.Result[updater.AppUpdateSummary]{r}
 	} else {
 		// Multiple: run concurrently via async.Map inside UpdateAll.
 		var err error
-		updateResults, err = updater.UpdateAll(ctx, specs, m, force, maxRetries)
+		updateResults, err = updater.UpdateAll(ctx, specs, m, maxRetries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ag-up: update failed: %v\n", err)
 			return 1

@@ -48,16 +48,31 @@ func menu() {
 	fmt.Println("    " + colorCyan + "3)" + colorReset + " Update Antigravity CLI     (agy)")
 	fmt.Println("    " + colorCyan + "4)" + colorReset + " Update Antigravity IDE")
 	fmt.Println("    " + colorCyan + "5)" + colorReset + " Update Antigravity Hub     (2.0)")
-	fmt.Println("    " + colorCyan + "6)" + colorReset + " Force Reinstall All        (ignore version)")
-	fmt.Println("    " + colorCyan + "7)" + colorReset + " Exit")
+	fmt.Println("    " + colorCyan + "6)" + colorReset + " Exit")
 	fmt.Println()
 	fmt.Print(colorBold + "  → " + colorReset)
 }
 
-// prompt reads a single line from stdin via a buffered scanner.
-func prompt(scanner *bufio.Scanner) string {
-	scanner.Scan()
-	return strings.TrimSpace(scanner.Text())
+// readLine reads a single line from reader, aggressively trimming all leading
+// and trailing whitespace including \r\n (important for TTY and piped input).
+// Returns an empty string on EOF or read error.
+func readLine(reader *bufio.Reader) string {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		// EOF with partial data is still valid (e.g. last line without trailing newline).
+		// Return whatever was read after trimming.
+		return strings.TrimSpace(line)
+	}
+	return strings.TrimSpace(line)
+}
+
+// pressEnterToContinue blocks until the user presses Enter, preventing the
+// menu loop from instantly redrawing and pushing result tables off-screen.
+// It creates its own reader so it does not consume bytes from the shared
+// menu reader.
+func pressEnterToContinue() {
+	fmt.Print("\nPress [Enter] to return to the menu...")
+	bufio.NewReader(os.Stdin).ReadBytes('\n') //nolint:errcheck
 }
 
 // PrintCheckResults renders a formatted table of version check results.
@@ -181,20 +196,30 @@ func PrintUpdateResults(results []result.Result[updater.AppUpdateSummary]) {
 
 // RunInteractiveMenu displays the main menu loop until the user chooses to
 // exit. It dispatches to the checker and updater packages based on selection.
+//
+// Input is read via bufio.Reader.ReadString('\n') + strings.TrimSpace, which
+// is more reliable than bufio.Scanner for interactive TTY sessions because it
+// handles \r\n line endings and does not stall waiting for a second newline.
 func RunInteractiveMenu(
 	ctx context.Context,
 	m *manifest.Manifest,
 	maxRetries int,
 	version string,
 ) error {
-	scanner := bufio.NewScanner(os.Stdin)
+	reader := bufio.NewReader(os.Stdin)
 	allSpecs := config.All()
 
 	for {
+		// Check for context cancellation at the top of each loop iteration so
+		// that a Ctrl-C received while the menu is printing exits cleanly.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		banner(version)
 		menu()
 
-		choice := prompt(scanner)
+		choice := readLine(reader)
 
 		switch choice {
 		case "1":
@@ -207,58 +232,52 @@ func RunInteractiveMenu(
 				continue
 			}
 			PrintCheckResults(results)
+			pressEnterToContinue()
 
 		case "2":
 			// Update all apps concurrently.
 			fmt.Println()
 			fmt.Println(colorCyan + "  Updating all applications..." + colorReset)
-			results, err := updater.UpdateAll(ctx, allSpecs, m, false, maxRetries)
+			results, err := updater.UpdateAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
 				continue
 			}
 			PrintUpdateResults(results)
+			pressEnterToContinue()
 
 		case "3":
 			// Update only the CLI.
 			fmt.Println()
 			fmt.Println(colorCyan + "  Updating Antigravity CLI (agy)..." + colorReset)
-			r := updater.Update(ctx, config.CLIApp, m, false, maxRetries)
+			r := updater.Update(ctx, config.CLIApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
+			pressEnterToContinue()
 
 		case "4":
 			// Update only the IDE.
 			fmt.Println()
 			fmt.Println(colorCyan + "  Updating Antigravity IDE..." + colorReset)
-			r := updater.Update(ctx, config.IDEApp, m, false, maxRetries)
+			r := updater.Update(ctx, config.IDEApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
+			pressEnterToContinue()
 
 		case "5":
 			// Update only the Hub.
 			fmt.Println()
 			fmt.Println(colorCyan + "  Updating Antigravity Hub (2.0)..." + colorReset)
-			r := updater.Update(ctx, config.HubApp, m, false, maxRetries)
+			r := updater.Update(ctx, config.HubApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
+			pressEnterToContinue()
 
-		case "6":
-			// Force reinstall all apps, ignoring cached versions.
-			fmt.Println()
-			fmt.Println(colorYellow + "  Force reinstalling all applications..." + colorReset)
-			results, err := updater.UpdateAll(ctx, allSpecs, m, true, maxRetries)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
-				continue
-			}
-			PrintUpdateResults(results)
-
-		case "7", "q", "Q", "exit":
+		case "6", "q", "Q", "exit":
 			fmt.Println()
 			fmt.Println(colorGray + "  Goodbye." + colorReset)
 			fmt.Println()
 			return nil
 
 		default:
-			fmt.Printf("\n  %sInvalid choice %q — please enter 1–7.%s\n\n",
+			fmt.Printf("\n  %sInvalid choice %q — please enter 1–6.%s\n\n",
 				colorYellow, choice, colorReset,
 			)
 		}

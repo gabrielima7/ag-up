@@ -56,8 +56,8 @@ type AppUpdateSummary struct {
 	// Success is true when the update completed without errors.
 	Success bool
 
-	// Skipped is true when the remote version matches the local version and
-	// --force was not passed.
+	// Skipped is retained for API compatibility but will never be true — every
+	// invocation of Update performs a clean install regardless of local version.
 	Skipped bool
 
 	// Error holds the first error encountered, nil on success.
@@ -150,6 +150,10 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 
 		// Found the target binary — write it to ~/.local/bin/<BinaryName>.
 		destPath := filepath.Join(binDir, spec.BinaryName)
+		// Remove any pre-existing file or dangling symlink at the destination.
+		// os.Create follows symlinks; if the symlink is dangling (e.g. after
+		// os.RemoveAll on the previous dataDir) it returns ELOOP.
+		_ = os.Remove(destPath)
 		outFile, err := os.Create(destPath)
 		if err != nil {
 			return fmt.Errorf("updater: create %q: %w", destPath, err)
@@ -183,9 +187,21 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 
 // extractAndInstall extracts a .tar.gz archive and installs all files to the
 // appropriate XDG directories for GUI apps (IDE and Hub).
-// It returns the absolute path to the main application binary found inside the
-// tarball (the executable named "antigravity"), which the caller uses to create
-// the ~/.local/bin/<app-id> symlink. Returns an empty string if not found.
+//
+// Before extraction the previous application directory is completely wiped via
+// os.RemoveAll so that ghost files from upstream structural changes cannot
+// accumulate across versions.
+//
+// Binary discovery uses a two-phase strategy:
+//  1. Exact match: an executable named exactly "antigravity".
+//  2. Loose match: an executable whose base name matches spec.ID (e.g.
+//     "antigravity-ide"). Entries inside resources/ or locales/ subdirectories
+//     are always excluded to prevent accidentally symlinking internal tools such
+//     as the language_server.
+//
+// Returns the absolute path to the discovered main binary, which the caller
+// uses to create the ~/.local/bin/<app-id> symlink. Returns an empty string if
+// no suitable binary is found.
 func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	binDir, err := xdg.BinDir()
 	if err != nil {
@@ -194,6 +210,17 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	dataDir, err := xdg.DataDir(spec.ID)
 	if err != nil {
 		return "", fmt.Errorf("updater: resolve data dir: %w", err)
+	}
+
+	// --- Clean installation wipe ---
+	// Remove the previous version directory entirely so that files deleted or
+	// moved in the new release do not persist as ghost entries.
+	slog.Info("updater: wiping previous installation directory", "app_id", spec.ID, "path", dataDir)
+	if err := os.RemoveAll(dataDir); err != nil {
+		return "", fmt.Errorf("updater: remove previous install dir %q: %w", dataDir, err)
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return "", fmt.Errorf("updater: recreate install dir %q: %w", dataDir, err)
 	}
 
 	f, err := os.Open(tarGzPath)
@@ -211,8 +238,13 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	tr := tar.NewReader(gz)
 
 	// actualBinaryPath tracks the installed path of the main GUI executable
-	// (the entry named "antigravity" with execute permissions).
+	// discovered via the exact "antigravity" name match (phase 1).
 	var actualBinaryPath string
+
+	// candidateBinaries accumulates all installed executables that are NOT
+	// inside a resources/ or locales/ subdirectory. Used for the loose-match
+	// fallback (phase 2) when no "antigravity" binary is found.
+	var candidateBinaries []string
 
 	for {
 		hdr, err := tr.Next()
@@ -258,6 +290,11 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 			// binaries (e.g. resources/bin/language_server). Using os.OpenFile with
 			// the header's mode followed by an explicit os.Chmod bypasses umask too.
 			fileMode := hdr.FileInfo().Mode()
+			// Remove any pre-existing file or dangling symlink before writing.
+			// This is critical when destPath is in ~/.local/bin/ and points to a
+			// file inside dataDir that was just wiped by os.RemoveAll — os.OpenFile
+			// would follow the dangling symlink and return ELOOP.
+			_ = os.Remove(destPath)
 			outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
 			if err != nil {
 				return "", fmt.Errorf("updater: create %q: %w", destPath, err)
@@ -282,10 +319,34 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 				)
 			}
 
-			// Track the main GUI entry point: the executable named "antigravity"
-			// (the Electron host binary used by both Hub and IDE).
-			if baseName == "antigravity" && fileMode&0111 != 0 && actualBinaryPath == "" {
-				actualBinaryPath = destPath
+			if fileMode&0111 != 0 {
+				// Phase 1: exact match — the Electron host binary used by both Hub and IDE.
+				if baseName == "antigravity" && actualBinaryPath == "" {
+					actualBinaryPath = destPath
+				}
+
+				// Accumulate candidates for phase 2 (loose match), excluding
+				// internal tool directories that must never be symlinked.
+				slashPath := filepath.ToSlash(cleanName)
+				if !strings.Contains(slashPath, "/resources/") &&
+					!strings.Contains(slashPath, "/locales/") {
+					candidateBinaries = append(candidateBinaries, destPath)
+				}
+			}
+		}
+	}
+
+	// Phase 2: loose match — triggered only when no "antigravity" binary was
+	// found (e.g. the IDE package ships its main binary as "antigravity-ide").
+	if actualBinaryPath == "" {
+		for _, p := range candidateBinaries {
+			if filepath.Base(p) == spec.ID {
+				actualBinaryPath = p
+				slog.Info("updater: main binary resolved via loose match",
+					"app_id", spec.ID,
+					"path", actualBinaryPath,
+				)
+				break
 			}
 		}
 	}
@@ -361,20 +422,21 @@ func runPostInstallHook(ctx context.Context, spec config.AppSpec) {
 
 // Update performs the complete update lifecycle for a single AppSpec:
 //  1. Check the remote version (with retries).
-//  2. Skip if already up-to-date (unless --force).
-//  3. Download the release tarball via DownloadTarGz.
-//  4. Verify SHA-512 checksum (if provided by manifest).
-//  5. Extract and install using app-type-aware logic.
-//  6. Generate a .desktop launcher for GUI apps.
-//  7. Run post-install hook for CLI (agy install).
-//  8. Persist updated version to the local manifest.
+//  2. Download the release tarball via DownloadTarGz.
+//  3. Verify SHA-512 checksum (if provided by manifest).
+//  4. Extract and install using app-type-aware logic (always clean-wipes first).
+//  5. Generate a .desktop launcher for GUI apps.
+//  6. Run post-install hook for CLI (agy install).
+//  7. Persist updated version to the local manifest.
+//
+// Every invocation performs a clean install — there is no "already up-to-date"
+// skip. This guarantees file integrity on every run.
 //
 // Returns result.Result[AppUpdateSummary] — Ok on success, Err on failure.
 func Update(
 	ctx context.Context,
 	spec config.AppSpec,
 	m *manifest.Manifest,
-	force bool,
 	maxRetries int,
 ) result.Result[AppUpdateSummary] {
 	localEntry, _ := manifest.Get(*m, spec.ID)
@@ -386,6 +448,7 @@ func Update(
 	}
 
 	// --- Step 1: Remote version check ---
+	fmt.Printf("  [%s] Checking remote version...\n", spec.ID)
 	checkResult := checker.Check(ctx, spec, *m, maxRetries)
 	if checkResult.IsErr() {
 		summary.Error = checkResult.Error()
@@ -395,30 +458,18 @@ func Update(
 	cr, _ := checkResult.Unwrap()
 	summary.ResolvedURL = cr.ResolvedURL
 
-	// Persist the fresh ETag even on a skip so future runs benefit from caching.
+	// Persist the fresh ETag so future check runs benefit from caching.
 	_ = manifest.MarkChecked(m, spec.ID, cr.ETag)
-
-	// --- Step 2: Skip if already up-to-date ---
-	if !cr.NeedsUpdate && !force {
-		slog.Info("updater: already up-to-date, skipping",
-			"app_id", spec.ID,
-			"version", cr.RemoteVersion,
-		)
-		summary.NewVersion = cr.RemoteVersion
-		summary.Skipped = true
-		summary.Success = true
-		return result.Ok(summary)
-	}
 
 	slog.Info("updater: starting update",
 		"app_id", spec.ID,
 		"old_version", cr.LocalVersion,
 		"new_version", cr.RemoteVersion,
 		"download_url", cr.ResolvedURL,
-		"force", force,
 	)
 
-	// --- Step 3: Download tarball ---
+	// --- Step 2: Download tarball ---
+	fmt.Printf("  [%s] Downloading %s...\n", spec.ID, cr.RemoteVersion)
 	tarGzPath, err := DownloadTarGz(ctx, cr.ResolvedURL, spec.ID, maxRetries)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -434,9 +485,9 @@ func Update(
 	}
 	defer os.Remove(tarGzPath)
 
-	// --- Step 4: SHA-512 security validation ---
+	// --- Step 3: SHA-512 security validation ---
 	if cr.ExpectedSHA512 != "" {
-		slog.Info("updater: verifying sha512 checksum", "app_id", spec.ID)
+		fmt.Printf("  [%s] Verifying integrity (SHA-512)...\n", spec.ID)
 		if err := verifySHA512(tarGzPath, cr.ExpectedSHA512); err != nil {
 			summary.Error = fmt.Errorf("updater: integrity check failed for %s: %w", spec.ID, err)
 			slog.Error("updater: sha512 mismatch — aborting installation",
@@ -448,7 +499,8 @@ func Update(
 		summary.SHA512Verified = true
 	}
 
-	// --- Step 5: Extract and install (app-type-aware) ---
+	// --- Step 4: Extract and install (app-type-aware) ---
+	fmt.Printf("  [%s] Extracting...\n", spec.ID)
 	var installErr error
 	var actualBinaryPath string
 	if spec.TarballInnerName != "" {
@@ -469,7 +521,8 @@ func Update(
 		return result.Err[AppUpdateSummary](summary.Error)
 	}
 
-	// --- Step 6: Generate .desktop launcher and terminal symlink for GUI apps ---
+	// --- Step 5: Generate .desktop launcher and terminal symlink for GUI apps ---
+	fmt.Printf("  [%s] Installing...\n", spec.ID)
 	if spec.IsGUI {
 		binDir, binErr := xdg.BinDir()
 		if binErr == nil {
@@ -489,10 +542,10 @@ func Update(
 		}
 	}
 
-	// --- Step 7: Post-install hook (CLI only: runs `agy install`) ---
+	// --- Step 6: Post-install hook (CLI only: runs `agy install`) ---
 	runPostInstallHook(ctx, spec)
 
-	// --- Step 8: Persist manifest ---
+	// --- Step 7: Persist manifest ---
 	if err := manifest.MarkInstalled(m, spec.ID, cr.RemoteVersion, cr.ETag); err != nil {
 		slog.Warn("updater: manifest update failed",
 			"app_id", spec.ID,
@@ -502,6 +555,8 @@ func Update(
 
 	summary.NewVersion = cr.RemoteVersion
 	summary.Success = true
+
+	fmt.Printf("  [%s] ✓ Done (%s)\n", spec.ID, cr.RemoteVersion)
 
 	slog.Info("updater: update complete",
 		"app_id", spec.ID,
@@ -513,11 +568,11 @@ func Update(
 }
 
 // UpdateAll concurrently updates all provided AppSpecs using async.Map.
+// Every spec receives a clean install — no version-match skipping occurs.
 func UpdateAll(
 	ctx context.Context,
 	specs []config.AppSpec,
 	m *manifest.Manifest,
-	force bool,
 	maxRetries int,
 ) ([]result.Result[AppUpdateSummary], error) {
 	results, err := async.Map(
@@ -525,7 +580,7 @@ func UpdateAll(
 		specs,
 		3,
 		func(ctx context.Context, spec config.AppSpec) (result.Result[AppUpdateSummary], error) {
-			r := Update(ctx, spec, m, force, maxRetries)
+			r := Update(ctx, spec, m, maxRetries)
 			return r, nil
 		},
 	)

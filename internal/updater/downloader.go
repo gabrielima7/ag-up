@@ -29,6 +29,13 @@ const userAgent = "ag-up/" + Version
 // downloadTimeout caps the total duration allowed for a single tarball download.
 const downloadTimeout = 5 * time.Minute
 
+// downloaderClient is a package-level HTTP client shared across all download
+// attempts. Reusing a single client and its underlying transport means:
+//   - TCP connection pooling is preserved between retry attempts.
+//   - TLS handshakes are amortised.
+//   - Transport-level timeout errors are not masked by re-initialisation.
+var downloaderClient = &http.Client{Timeout: downloadTimeout}
+
 // isNonRetryableError checks if an error represents a permanent client failure
 // (such as HTTP 404 Not Found or HTTP 403 Forbidden).
 func isNonRetryableError(err error) bool {
@@ -88,8 +95,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 			}
 			req.Header.Set("User-Agent", userAgent)
 
-			httpClient := &http.Client{Timeout: downloadTimeout}
-			resp, err := httpClient.Do(req)
+			resp, err := downloaderClient.Do(req)
 			if err != nil {
 				if ctx.Err() != nil {
 					return fmt.Errorf("downloader: request cancelled for %q: %w", appID, ctx.Err())

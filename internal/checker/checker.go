@@ -31,6 +31,19 @@ import (
 const defaultHTTPTimeout = 15 * time.Second
 const userAgent = "ag-up/v0.1.0"
 
+// isNonRetryableHTTPError returns true for permanent client-side HTTP errors
+// (4xx) that will never succeed on retry. Mirrors the same helper in downloader.go.
+func isNonRetryableHTTPError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "HTTP 404") ||
+		strings.Contains(errStr, "HTTP 403") ||
+		strings.Contains(errStr, "HTTP 400") ||
+		strings.Contains(errStr, "HTTP 401")
+}
+
 // CheckResult carries the outcome of a single remote version check.
 type CheckResult struct {
 	// AppID matches config.AppSpec.ID.
@@ -267,7 +280,11 @@ func fetchLatestRelease(
 		retry.WithJitter(true),
 		retry.WithMaxDelay(10*time.Second),
 		retry.WithRetryIf(func(err error) bool {
-			return ctx.Err() == nil
+			// Abort immediately on context cancellation or permanent HTTP 4xx errors.
+			if ctx.Err() != nil {
+				return false
+			}
+			return !isNonRetryableHTTPError(err)
 		}),
 	)
 
