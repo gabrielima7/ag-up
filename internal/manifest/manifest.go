@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gabrielima7/GopherCore/jsonutil"
@@ -36,20 +37,23 @@ type Manifest struct {
 
 	// UpdatedAt records the last time the manifest file was written.
 	UpdatedAt time.Time `json:"updated_at"`
+
+	mu *sync.RWMutex
 }
 
 // newManifest returns an empty, initialised Manifest.
-func newManifest() Manifest {
-	return Manifest{
+func newManifest() *Manifest {
+	return &Manifest{
 		Apps:      make(map[string]AppEntry),
 		UpdatedAt: time.Now(),
+		mu:        &sync.RWMutex{},
 	}
 }
 
 // Load reads the manifest file from disk. If the file does not exist yet a
 // fresh, empty Manifest is returned without error — this is the expected
 // behaviour on first run.
-func Load() (Manifest, error) {
+func Load() (*Manifest, error) {
 	path, err := xdg.ManifestPath()
 	if err != nil {
 		return newManifest(), fmt.Errorf("manifest: resolve path: %w", err)
@@ -65,6 +69,7 @@ func Load() (Manifest, error) {
 	}
 
 	var m Manifest
+	m.mu = &sync.RWMutex{}
 	if err := jsonutil.Unmarshal(data, &m); err != nil {
 		return newManifest(), fmt.Errorf("manifest: parse %q: %w", path, err)
 	}
@@ -74,12 +79,14 @@ func Load() (Manifest, error) {
 		m.Apps = make(map[string]AppEntry)
 	}
 
-	return m, nil
+	return &m, nil
 }
 
 // Save serialises the manifest to disk, atomically replacing the previous
 // version via a write-and-rename strategy to prevent partial writes.
-func Save(m Manifest) error {
+func Save(m *Manifest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	path, err := xdg.ManifestPath()
 	if err != nil {
 		return fmt.Errorf("manifest: resolve path: %w", err)
@@ -108,7 +115,9 @@ func Save(m Manifest) error {
 
 // Get returns the AppEntry for the given appID, plus a boolean indicating
 // whether a record exists (analogous to a Go map lookup).
-func Get(m Manifest, appID string) (AppEntry, bool) {
+func Get(m *Manifest, appID string) (AppEntry, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	entry, ok := m.Apps[appID]
 	return entry, ok
 }
@@ -116,28 +125,34 @@ func Get(m Manifest, appID string) (AppEntry, bool) {
 // Set updates the in-memory AppEntry for appID and persists the manifest to
 // disk immediately. Returns an error if the save fails.
 func Set(m *Manifest, appID string, entry AppEntry) error {
+	m.mu.Lock()
 	m.Apps[appID] = entry
-	return Save(*m)
+	m.mu.Unlock()
+	return Save(m)
 }
 
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
 // modifying the InstalledVersion, then saves the manifest.
 func MarkChecked(m *Manifest, appID, etag string) error {
+	m.mu.Lock()
 	entry := m.Apps[appID]
 	entry.LastChecked = time.Now()
 	if etag != "" {
 		entry.ETag = etag
 	}
+	m.mu.Unlock()
 	return Set(m, appID, entry)
 }
 
 // MarkInstalled records a successful installation of version for appID,
 // updating both InstalledVersion and LastUpdated.
 func MarkInstalled(m *Manifest, appID, version, etag string) error {
+	m.mu.Lock()
 	entry := m.Apps[appID]
 	entry.InstalledVersion = version
 	entry.ETag = etag
 	entry.LastChecked = time.Now()
 	entry.LastUpdated = time.Now()
+	m.mu.Unlock()
 	return Set(m, appID, entry)
 }

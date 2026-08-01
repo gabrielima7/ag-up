@@ -140,7 +140,7 @@ func main() {
 	nonInteractive := *flagAll || *flagCLI || *flagIDE || *flagHub || *flagCheck
 
 	if nonInteractive {
-		code := runFlagMode(ctx, &m, *flagAll, *flagCLI, *flagIDE, *flagHub, *flagCheck, maxRetries)
+		code := runFlagMode(ctx, m, *flagAll, *flagCLI, *flagIDE, *flagHub, *flagCheck, maxRetries)
 		// If the context was cancelled (signal received), override the exit code.
 		if ctx.Err() != nil {
 			handleCancellation()
@@ -151,7 +151,7 @@ func main() {
 	// -----------------------------------------------------------------------
 	// Interactive terminal menu (default when no flags are provided).
 	// -----------------------------------------------------------------------
-	if err := ui.RunInteractiveMenu(ctx, &m, maxRetries, Version); err != nil {
+	if err := ui.RunInteractiveMenu(ctx, m, maxRetries, Version); err != nil {
 		// Distinguish user interruption from a real menu error.
 		if ctx.Err() != nil {
 			handleCancellation()
@@ -197,7 +197,7 @@ func runFlagMode(
 		}
 
 		fmt.Println("\n  Checking versions…")
-		results, err := checker.CheckAll(ctx, specs, *m, maxRetries)
+		results, err := checker.CheckAll(ctx, specs, m, maxRetries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ag-up: check failed: %v\n", err)
 			return 1
