@@ -53,6 +53,9 @@ func isNonRetryableError(err error) bool {
 // named temporary file under os.TempDir(). Returns the path to the temp file
 // on success; the caller is responsible for removing it (via defer os.Remove).
 func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
+	defer cancel()
+
 	// Sanitise inputs through guard to strip null bytes and control characters.
 	safeURL := guard.SanitizeString(rawURL)
 	safeID := guard.SanitizeString(appID)

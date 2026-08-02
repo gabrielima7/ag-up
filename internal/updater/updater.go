@@ -439,7 +439,7 @@ func Update(
 	m *manifest.Manifest,
 	maxRetries int,
 ) result.Result[AppUpdateSummary] {
-	localEntry, _ := manifest.Get(*m, spec.ID)
+	localEntry, _ := manifest.Get(m, spec.ID)
 
 	summary := AppUpdateSummary{
 		AppID:      spec.ID,
@@ -449,7 +449,7 @@ func Update(
 
 	// --- Step 1: Remote version check ---
 	fmt.Printf("  [%s] Checking remote version...\n", spec.ID)
-	checkResult := checker.Check(ctx, spec, *m, maxRetries)
+	checkResult := checker.Check(ctx, spec, m, maxRetries)
 	if checkResult.IsErr() {
 		summary.Error = checkResult.Error()
 		return result.Err[AppUpdateSummary](summary.Error)
