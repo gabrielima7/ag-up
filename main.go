@@ -51,11 +51,11 @@ func main() {
 	// -----------------------------------------------------------------------
 	// Flag definitions
 	// -----------------------------------------------------------------------
-	flagAll     := flag.Bool("all", false, "Update all Antigravity applications concurrently")
-	flagCLI     := flag.Bool("cli", false, "Update only the Antigravity CLI (agy)")
-	flagIDE     := flag.Bool("ide", false, "Update only the Antigravity IDE")
-	flagHub     := flag.Bool("hub", false, "Update only the Antigravity Hub (2.0)")
-	flagCheck   := flag.Bool("check", false, "Dry-run: check versions without downloading")
+	flagAll := flag.Bool("all", false, "Update all Antigravity applications concurrently")
+	flagCLI := flag.Bool("cli", false, "Update only the Antigravity CLI (agy)")
+	flagIDE := flag.Bool("ide", false, "Update only the Antigravity IDE")
+	flagHub := flag.Bool("hub", false, "Update only the Antigravity Hub (2.0)")
+	flagCheck := flag.Bool("check", false, "Dry-run: check versions without downloading")
 	flagRetries := flag.Int("retries", 3, "Maximum HTTP retry attempts per operation (1–10)")
 	flagVersion := flag.Bool("version", false, "Print ag-up version and exit")
 
@@ -140,7 +140,7 @@ func main() {
 	nonInteractive := *flagAll || *flagCLI || *flagIDE || *flagHub || *flagCheck
 
 	if nonInteractive {
-		code := runFlagMode(ctx, &m, *flagAll, *flagCLI, *flagIDE, *flagHub, *flagCheck, maxRetries)
+		code := runFlagMode(ctx, m, *flagAll, *flagCLI, *flagIDE, *flagHub, *flagCheck, maxRetries)
 		// If the context was cancelled (signal received), override the exit code.
 		if ctx.Err() != nil {
 			handleCancellation()
@@ -151,7 +151,7 @@ func main() {
 	// -----------------------------------------------------------------------
 	// Interactive terminal menu (default when no flags are provided).
 	// -----------------------------------------------------------------------
-	if err := ui.RunInteractiveMenu(ctx, &m, maxRetries, Version); err != nil {
+	if err := ui.RunInteractiveMenu(ctx, m, maxRetries, Version); err != nil {
 		// Distinguish user interruption from a real menu error.
 		if ctx.Err() != nil {
 			handleCancellation()
@@ -197,7 +197,7 @@ func runFlagMode(
 		}
 
 		fmt.Println("\n  Checking versions…")
-		results, err := checker.CheckAll(ctx, specs, *m, maxRetries)
+		results, err := checker.CheckAll(ctx, specs, m, maxRetries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ag-up: check failed: %v\n", err)
 			return 1

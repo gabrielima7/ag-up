@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gabrielima7/GopherCore/jsonutil"
@@ -31,6 +32,8 @@ type AppEntry struct {
 
 // Manifest is the top-level structure serialised to .manifest.json.
 type Manifest struct {
+	mu sync.RWMutex
+
 	// Apps maps each application ID to its local metadata.
 	Apps map[string]AppEntry `json:"apps"`
 
@@ -49,24 +52,28 @@ func newManifest() Manifest {
 // Load reads the manifest file from disk. If the file does not exist yet a
 // fresh, empty Manifest is returned without error — this is the expected
 // behaviour on first run.
-func Load() (Manifest, error) {
+func Load() (*Manifest, error) {
 	path, err := xdg.ManifestPath()
 	if err != nil {
-		return newManifest(), fmt.Errorf("manifest: resolve path: %w", err)
+		m := newManifest()
+		return &m, fmt.Errorf("manifest: resolve path: %w", err)
 	}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		// First run — return an empty manifest, not an error.
-		return newManifest(), nil
+		m := newManifest()
+		return &m, nil
 	}
 	if err != nil {
-		return newManifest(), fmt.Errorf("manifest: read %q: %w", path, err)
+		m := newManifest()
+		return &m, fmt.Errorf("manifest: read %q: %w", path, err)
 	}
 
 	var m Manifest
 	if err := jsonutil.Unmarshal(data, &m); err != nil {
-		return newManifest(), fmt.Errorf("manifest: parse %q: %w", path, err)
+		m := newManifest()
+		return &m, fmt.Errorf("manifest: parse %q: %w", path, err)
 	}
 
 	// Guard against a nil map (e.g., JSON with "apps": null).
@@ -74,19 +81,21 @@ func Load() (Manifest, error) {
 		m.Apps = make(map[string]AppEntry)
 	}
 
-	return m, nil
+	return &m, nil
 }
 
 // Save serialises the manifest to disk, atomically replacing the previous
 // version via a write-and-rename strategy to prevent partial writes.
-func Save(m Manifest) error {
+func Save(m *Manifest) error {
 	path, err := xdg.ManifestPath()
 	if err != nil {
 		return fmt.Errorf("manifest: resolve path: %w", err)
 	}
 
-	m.UpdatedAt = time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
+	m.UpdatedAt = time.Now()
 	data, err := jsonutil.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("manifest: marshal: %w", err)
@@ -108,7 +117,9 @@ func Save(m Manifest) error {
 
 // Get returns the AppEntry for the given appID, plus a boolean indicating
 // whether a record exists (analogous to a Go map lookup).
-func Get(m Manifest, appID string) (AppEntry, bool) {
+func Get(m *Manifest, appID string) (AppEntry, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	entry, ok := m.Apps[appID]
 	return entry, ok
 }
@@ -116,28 +127,36 @@ func Get(m Manifest, appID string) (AppEntry, bool) {
 // Set updates the in-memory AppEntry for appID and persists the manifest to
 // disk immediately. Returns an error if the save fails.
 func Set(m *Manifest, appID string, entry AppEntry) error {
+	m.mu.Lock()
 	m.Apps[appID] = entry
-	return Save(*m)
+	m.mu.Unlock()
+	return Save(m)
 }
 
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
 // modifying the InstalledVersion, then saves the manifest.
 func MarkChecked(m *Manifest, appID, etag string) error {
+	m.mu.Lock()
 	entry := m.Apps[appID]
 	entry.LastChecked = time.Now()
 	if etag != "" {
 		entry.ETag = etag
 	}
-	return Set(m, appID, entry)
+	m.Apps[appID] = entry
+	m.mu.Unlock()
+	return Save(m)
 }
 
 // MarkInstalled records a successful installation of version for appID,
 // updating both InstalledVersion and LastUpdated.
 func MarkInstalled(m *Manifest, appID, version, etag string) error {
+	m.mu.Lock()
 	entry := m.Apps[appID]
 	entry.InstalledVersion = version
 	entry.ETag = etag
 	entry.LastChecked = time.Now()
 	entry.LastUpdated = time.Now()
-	return Set(m, appID, entry)
+	m.Apps[appID] = entry
+	m.mu.Unlock()
+	return Save(m)
 }

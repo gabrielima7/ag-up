@@ -310,7 +310,7 @@ func fetchLatestRelease(
 func Check(
 	ctx context.Context,
 	spec config.AppSpec,
-	m manifest.Manifest,
+	m *manifest.Manifest,
 	maxRetries int,
 ) result.Result[CheckResult] {
 	localEntry, _ := manifest.Get(m, spec.ID)
@@ -321,7 +321,7 @@ func Check(
 func CheckAll(
 	ctx context.Context,
 	specs []config.AppSpec,
-	m manifest.Manifest,
+	m *manifest.Manifest,
 	maxRetries int,
 ) ([]result.Result[CheckResult], error) {
 	results, err := async.Map(

@@ -226,7 +226,7 @@ func RunInteractiveMenu(
 			// Dry-run check for all apps.
 			fmt.Println()
 			fmt.Println(colorCyan + "  Checking versions (this may take a moment)..." + colorReset)
-			results, err := checker.CheckAll(ctx, allSpecs, *m, maxRetries)
+			results, err := checker.CheckAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
 				continue
