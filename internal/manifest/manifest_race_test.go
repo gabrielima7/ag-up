@@ -13,7 +13,7 @@ func TestManifestRace(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			MarkChecked(&m, "agy", "etag")
+			MarkChecked(m, "agy", "etag")
 		}(i)
 	}
 	wg.Wait()

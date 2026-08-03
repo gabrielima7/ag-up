@@ -19,6 +19,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gabrielima7/GopherCore/async"
 	"github.com/gabrielima7/GopherCore/guard"
@@ -32,6 +34,15 @@ import (
 
 // Version is the current ag-up release version.
 const Version = "v0.1.0"
+
+// printMu synchronizes stdout access to prevent interleaved printing during parallel updates.
+var printMu sync.Mutex
+
+func safePrint(format string, a ...any) {
+	printMu.Lock()
+	defer printMu.Unlock()
+	fmt.Printf(format, a...)
+}
 
 // AppUpdateSummary is the outcome of a single application update attempt.
 type AppUpdateSummary struct {
@@ -150,24 +161,31 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 
 		// Found the target binary — write it to ~/.local/bin/<BinaryName>.
 		destPath := filepath.Join(binDir, spec.BinaryName)
-		// Remove any pre-existing file or dangling symlink at the destination.
-		// os.Create follows symlinks; if the symlink is dangling (e.g. after
-		// os.RemoveAll on the previous dataDir) it returns ELOOP.
-		_ = os.Remove(destPath)
-		outFile, err := os.Create(destPath)
+
+		// Write to a temporary file first for atomic replacement.
+		tmpPath := fmt.Sprintf("%s.tmp.%d", destPath, time.Now().UnixNano())
+		outFile, err := os.Create(tmpPath)
 		if err != nil {
-			return fmt.Errorf("updater: create %q: %w", destPath, err)
+			return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 		}
 
 		// #nosec G110 — tarball size is capped by the download timeout.
 		if _, err := io.Copy(outFile, tr); err != nil {
 			outFile.Close()
-			return fmt.Errorf("updater: write %q: %w", destPath, err)
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 		}
 		outFile.Close()
 
-		if err := os.Chmod(destPath, 0755); err != nil {
-			return fmt.Errorf("updater: chmod %q: %w", destPath, err)
+		if err := os.Chmod(tmpPath, 0755); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
+		}
+
+		// Atomically replace the destination file
+		if err := os.Rename(tmpPath, destPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 		}
 
 		slog.Info("updater: cli binary installed",
@@ -290,26 +308,34 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 			// binaries (e.g. resources/bin/language_server). Using os.OpenFile with
 			// the header's mode followed by an explicit os.Chmod bypasses umask too.
 			fileMode := hdr.FileInfo().Mode()
-			// Remove any pre-existing file or dangling symlink before writing.
-			// This is critical when destPath is in ~/.local/bin/ and points to a
-			// file inside dataDir that was just wiped by os.RemoveAll — os.OpenFile
-			// would follow the dangling symlink and return ELOOP.
-			_ = os.Remove(destPath)
-			outFile, err := os.OpenFile(destPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
+
+			// Write to a uniquely-named temporary file first for atomic replacement.
+			// This prevents returning ELOOP if destPath points to a dangling symlink,
+			// and ensures a crash doesn't leave corrupted partial files.
+			tmpPath := fmt.Sprintf("%s.tmp.%d", destPath, time.Now().UnixNano())
+			outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
 			if err != nil {
-				return "", fmt.Errorf("updater: create %q: %w", destPath, err)
+				return "", fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
 			if _, err := io.Copy(outFile, tr); err != nil {
 				outFile.Close()
-				return "", fmt.Errorf("updater: write %q: %w", destPath, err)
+				_ = os.Remove(tmpPath)
+				return "", fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
 			outFile.Close()
 
 			// Explicit chmod after write — safety net against umask stripping +x.
-			if err := os.Chmod(destPath, fileMode); err != nil {
-				return "", fmt.Errorf("updater: chmod %q: %w", destPath, err)
+			if err := os.Chmod(tmpPath, fileMode); err != nil {
+				_ = os.Remove(tmpPath)
+				return "", fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
+			}
+
+			// Atomically replace the destination file
+			if err := os.Rename(tmpPath, destPath); err != nil {
+				_ = os.Remove(tmpPath)
+				return "", fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
 
 			if baseName == spec.BinaryName {
@@ -355,8 +381,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 }
 
 // createGUISymlink atomically creates a symlink at ~/.local/bin/<app-id> pointing
-// to actualBinaryPath. Any pre-existing file or old symlink at that location is
-// removed first, making the operation idempotent and safe to run on every update.
+// to actualBinaryPath using a create-and-rename strategy.
 func createGUISymlink(binDir, appID, actualBinaryPath string) {
 	if actualBinaryPath == "" {
 		slog.Warn("updater: main binary not found during extraction, skipping symlink",
@@ -366,15 +391,25 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 	}
 
 	symlinkPath := filepath.Join(binDir, appID)
+	tmpSymlinkPath := fmt.Sprintf("%s.tmp.%d", symlinkPath, time.Now().UnixNano())
 
-	// Remove any existing stub, dummy, or outdated symlink — ignore "not found".
-	_ = os.Remove(symlinkPath)
+	// Create temporary symlink
+	if err := os.Symlink(actualBinaryPath, tmpSymlinkPath); err != nil {
+		slog.Warn("updater: failed to create temporary symlink",
+			"app_id", appID,
+			"tmp_symlink", tmpSymlinkPath,
+			"target", actualBinaryPath,
+			"error", err,
+		)
+		return
+	}
 
-	if err := os.Symlink(actualBinaryPath, symlinkPath); err != nil {
-		slog.Warn("updater: failed to create symlink",
+	// Atomically rename it over the old one
+	if err := os.Rename(tmpSymlinkPath, symlinkPath); err != nil {
+		_ = os.Remove(tmpSymlinkPath)
+		slog.Warn("updater: failed to replace symlink atomically",
 			"app_id", appID,
 			"symlink", symlinkPath,
-			"target", actualBinaryPath,
 			"error", err,
 		)
 		return
@@ -405,7 +440,11 @@ func runPostInstallHook(ctx context.Context, spec config.AppSpec) {
 	}
 	agyPath := filepath.Join(binDir, "agy")
 
-	cmd := exec.CommandContext(ctx, agyPath, "install")
+	// Add timeout to prevent dangling goroutines if the post-install hook hangs
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	cmd := exec.CommandContext(timeoutCtx, agyPath, "install")
 	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		slog.Info("updater: post-install hook output", "output", string(out))
@@ -439,6 +478,10 @@ func Update(
 	m *manifest.Manifest,
 	maxRetries int,
 ) result.Result[AppUpdateSummary] {
+	// Apply a global timeout for the entire update operation for this app to prevent stalls
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
 	localEntry, _ := manifest.Get(m, spec.ID)
 
 	summary := AppUpdateSummary{
@@ -448,7 +491,7 @@ func Update(
 	}
 
 	// --- Step 1: Remote version check ---
-	fmt.Printf("  [%s] Checking remote version...\n", spec.ID)
+	safePrint("  [%s] Checking remote version...\n", spec.ID)
 	checkResult := checker.Check(ctx, spec, m, maxRetries)
 	if checkResult.IsErr() {
 		summary.Error = checkResult.Error()
@@ -469,7 +512,7 @@ func Update(
 	)
 
 	// --- Step 2: Download tarball ---
-	fmt.Printf("  [%s] Downloading %s...\n", spec.ID, cr.RemoteVersion)
+	safePrint("  [%s] Downloading %s...\n", spec.ID, cr.RemoteVersion)
 	tarGzPath, err := DownloadTarGz(ctx, cr.ResolvedURL, spec.ID, maxRetries)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -487,7 +530,7 @@ func Update(
 
 	// --- Step 3: SHA-512 security validation ---
 	if cr.ExpectedSHA512 != "" {
-		fmt.Printf("  [%s] Verifying integrity (SHA-512)...\n", spec.ID)
+		safePrint("  [%s] Verifying integrity (SHA-512)...\n", spec.ID)
 		if err := verifySHA512(tarGzPath, cr.ExpectedSHA512); err != nil {
 			summary.Error = fmt.Errorf("updater: integrity check failed for %s: %w", spec.ID, err)
 			slog.Error("updater: sha512 mismatch — aborting installation",
@@ -500,7 +543,7 @@ func Update(
 	}
 
 	// --- Step 4: Extract and install (app-type-aware) ---
-	fmt.Printf("  [%s] Extracting...\n", spec.ID)
+	safePrint("  [%s] Extracting...\n", spec.ID)
 	var installErr error
 	var actualBinaryPath string
 	if spec.TarballInnerName != "" {
@@ -522,7 +565,7 @@ func Update(
 	}
 
 	// --- Step 5: Generate .desktop launcher and terminal symlink for GUI apps ---
-	fmt.Printf("  [%s] Installing...\n", spec.ID)
+	safePrint("  [%s] Installing...\n", spec.ID)
 	if spec.IsGUI {
 		binDir, binErr := xdg.BinDir()
 		if binErr == nil {
@@ -556,7 +599,7 @@ func Update(
 	summary.NewVersion = cr.RemoteVersion
 	summary.Success = true
 
-	fmt.Printf("  [%s] ✓ Done (%s)\n", spec.ID, cr.RemoteVersion)
+	safePrint("  [%s] ✓ Done (%s)\n", spec.ID, cr.RemoteVersion)
 
 	slog.Info("updater: update complete",
 		"app_id", spec.ID,
