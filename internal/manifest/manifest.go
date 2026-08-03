@@ -42,8 +42,8 @@ type Manifest struct {
 }
 
 // newManifest returns an empty, initialised Manifest.
-func newManifest() Manifest {
-	return Manifest{
+func newManifest() *Manifest {
+	return &Manifest{
 		Apps:      make(map[string]AppEntry),
 		UpdatedAt: time.Now(),
 	}
@@ -55,25 +55,21 @@ func newManifest() Manifest {
 func Load() (*Manifest, error) {
 	path, err := xdg.ManifestPath()
 	if err != nil {
-		m := newManifest()
-		return &m, fmt.Errorf("manifest: resolve path: %w", err)
+		return newManifest(), fmt.Errorf("manifest: resolve path: %w", err)
 	}
 
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		// First run — return an empty manifest, not an error.
-		m := newManifest()
-		return &m, nil
+		return newManifest(), nil
 	}
 	if err != nil {
-		m := newManifest()
-		return &m, fmt.Errorf("manifest: read %q: %w", path, err)
+		return newManifest(), fmt.Errorf("manifest: read %q: %w", path, err)
 	}
 
-	var m Manifest
-	if err := jsonutil.Unmarshal(data, &m); err != nil {
-		m := newManifest()
-		return &m, fmt.Errorf("manifest: parse %q: %w", path, err)
+	m := newManifest()
+	if err := jsonutil.Unmarshal(data, m); err != nil {
+		return newManifest(), fmt.Errorf("manifest: parse %q: %w", path, err)
 	}
 
 	// Guard against a nil map (e.g., JSON with "apps": null).
@@ -81,7 +77,7 @@ func Load() (*Manifest, error) {
 		m.Apps = make(map[string]AppEntry)
 	}
 
-	return &m, nil
+	return m, nil
 }
 
 // Save serialises the manifest to disk, atomically replacing the previous
@@ -101,8 +97,9 @@ func Save(m *Manifest) error {
 		return fmt.Errorf("manifest: marshal: %w", err)
 	}
 
-	// Write to a temporary file first, then rename — atomic on Linux.
-	tmpPath := path + ".tmp"
+	// Write to a uniquely-named temporary file first, then rename — atomic on Linux.
+	// This prevents conflicts if multiple ag-up processes run Save concurrently.
+	tmpPath := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
 	}

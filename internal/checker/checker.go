@@ -313,8 +313,12 @@ func Check(
 	m *manifest.Manifest,
 	maxRetries int,
 ) result.Result[CheckResult] {
+	// Add timeout to prevent dangling goroutines or infinite blocks on network calls
+	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	localEntry, _ := manifest.Get(m, spec.ID)
-	return fetchLatestRelease(ctx, spec, localEntry, maxRetries)
+	return fetchLatestRelease(timeoutCtx, spec, localEntry, maxRetries)
 }
 
 // CheckAll performs parallel version checks for all provided AppSpecs using async.Map.
