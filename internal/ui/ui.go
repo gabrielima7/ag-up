@@ -55,24 +55,41 @@ func menu() {
 
 // readLine reads a single line from reader, aggressively trimming all leading
 // and trailing whitespace including \r\n (important for TTY and piped input).
-// Returns an empty string on EOF or read error.
-func readLine(reader *bufio.Reader) string {
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		// EOF with partial data is still valid (e.g. last line without trailing newline).
-		// Return whatever was read after trimming.
-		return strings.TrimSpace(line)
+// Returns an empty string on EOF, read error, or context cancellation.
+func readLine(ctx context.Context, reader *bufio.Reader) string {
+	type readResult struct {
+		line string
+		err  error
 	}
-	return strings.TrimSpace(line)
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := reader.ReadString('\n')
+		ch <- readResult{line, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ""
+	case res := <-ch:
+		return strings.TrimSpace(res.line)
+	}
 }
 
 // pressEnterToContinue blocks until the user presses Enter, preventing the
 // menu loop from instantly redrawing and pushing result tables off-screen.
-// It creates its own reader so it does not consume bytes from the shared
-// menu reader.
-func pressEnterToContinue() {
+// It accepts the context to avoid blocking forever if a shutdown signal is received.
+func pressEnterToContinue(ctx context.Context, reader *bufio.Reader) {
 	fmt.Print("\nPress [Enter] to return to the menu...")
-	bufio.NewReader(os.Stdin).ReadBytes('\n') //nolint:errcheck
+	ch := make(chan struct{}, 1)
+	go func() {
+		_, _ = reader.ReadBytes('\n')
+		ch <- struct{}{}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-ch:
+	}
 }
 
 // PrintCheckResults renders a formatted table of version check results.
@@ -219,7 +236,12 @@ func RunInteractiveMenu(
 		banner(version)
 		menu()
 
-		choice := readLine(reader)
+		choice := readLine(ctx, reader)
+
+		// Check for context cancellation after blocking on readLine
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 
 		switch choice {
 		case "1":
@@ -232,7 +254,7 @@ func RunInteractiveMenu(
 				continue
 			}
 			PrintCheckResults(results)
-			pressEnterToContinue()
+			pressEnterToContinue(ctx, reader)
 
 		case "2":
 			// Update all apps concurrently.
@@ -244,7 +266,7 @@ func RunInteractiveMenu(
 				continue
 			}
 			PrintUpdateResults(results)
-			pressEnterToContinue()
+			pressEnterToContinue(ctx, reader)
 
 		case "3":
 			// Update only the CLI.
@@ -252,7 +274,7 @@ func RunInteractiveMenu(
 			fmt.Println(colorCyan + "  Updating Antigravity CLI (agy)..." + colorReset)
 			r := updater.Update(ctx, config.CLIApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
-			pressEnterToContinue()
+			pressEnterToContinue(ctx, reader)
 
 		case "4":
 			// Update only the IDE.
@@ -260,7 +282,7 @@ func RunInteractiveMenu(
 			fmt.Println(colorCyan + "  Updating Antigravity IDE..." + colorReset)
 			r := updater.Update(ctx, config.IDEApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
-			pressEnterToContinue()
+			pressEnterToContinue(ctx, reader)
 
 		case "5":
 			// Update only the Hub.
@@ -268,7 +290,7 @@ func RunInteractiveMenu(
 			fmt.Println(colorCyan + "  Updating Antigravity Hub (2.0)..." + colorReset)
 			r := updater.Update(ctx, config.HubApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
-			pressEnterToContinue()
+			pressEnterToContinue(ctx, reader)
 
 		case "6", "q", "Q", "exit":
 			fmt.Println()

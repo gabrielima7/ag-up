@@ -162,30 +162,37 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 		// Found the target binary — write it to ~/.local/bin/<BinaryName>.
 		destPath := filepath.Join(binDir, spec.BinaryName)
 
-		// Write to a temporary file first for atomic replacement.
-		tmpPath := fmt.Sprintf("%s.tmp.%d", destPath, time.Now().UnixNano())
-		outFile, err := os.Create(tmpPath)
-		if err != nil {
-			return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
-		}
+		// Wrapping file extraction logic in a closure allows safe defer for os.Remove
+		err = func() error {
+			// Write to a uniquely-named temporary file first for atomic replacement.
+			// Incorporate os.Getpid() to prevent cross-process collisions.
+			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
+			outFile, err := os.Create(tmpPath)
+			if err != nil {
+				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
+			}
+			defer os.Remove(tmpPath)
 
-		// #nosec G110 — tarball size is capped by the download timeout.
-		if _, err := io.Copy(outFile, tr); err != nil {
+			// #nosec G110 — tarball size is capped by the download timeout.
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
+			}
 			outFile.Close()
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("updater: write %q: %w", tmpPath, err)
-		}
-		outFile.Close()
 
-		if err := os.Chmod(tmpPath, 0755); err != nil {
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
-		}
+			if err := os.Chmod(tmpPath, 0755); err != nil {
+				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
+			}
 
-		// Atomically replace the destination file
-		if err := os.Rename(tmpPath, destPath); err != nil {
-			_ = os.Remove(tmpPath)
-			return fmt.Errorf("updater: rename to %q: %w", destPath, err)
+			// Atomically replace the destination file
+			if err := os.Rename(tmpPath, destPath); err != nil {
+				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
+			}
+			return nil
+		}()
+
+		if err != nil {
+			return err
 		}
 
 		slog.Info("updater: cli binary installed",
@@ -309,33 +316,38 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 			// the header's mode followed by an explicit os.Chmod bypasses umask too.
 			fileMode := hdr.FileInfo().Mode()
 
-			// Write to a uniquely-named temporary file first for atomic replacement.
-			// This prevents returning ELOOP if destPath points to a dangling symlink,
-			// and ensures a crash doesn't leave corrupted partial files.
-			tmpPath := fmt.Sprintf("%s.tmp.%d", destPath, time.Now().UnixNano())
-			outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
-			if err != nil {
-				return "", fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
-			}
+			err = func() error {
+				// Write to a uniquely-named temporary file first for atomic replacement.
+				// This prevents returning ELOOP if destPath points to a dangling symlink,
+				// and ensures a crash doesn't leave corrupted partial files.
+				tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
+				outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
+				if err != nil {
+					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
+				}
+				defer os.Remove(tmpPath)
 
-			// #nosec G110 — tarball size is capped by the download timeout.
-			if _, err := io.Copy(outFile, tr); err != nil {
+				// #nosec G110 — tarball size is capped by the download timeout.
+				if _, err := io.Copy(outFile, tr); err != nil {
+					outFile.Close()
+					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
+				}
 				outFile.Close()
-				_ = os.Remove(tmpPath)
-				return "", fmt.Errorf("updater: write %q: %w", tmpPath, err)
-			}
-			outFile.Close()
 
-			// Explicit chmod after write — safety net against umask stripping +x.
-			if err := os.Chmod(tmpPath, fileMode); err != nil {
-				_ = os.Remove(tmpPath)
-				return "", fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
-			}
+				// Explicit chmod after write — safety net against umask stripping +x.
+				if err := os.Chmod(tmpPath, fileMode); err != nil {
+					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
+				}
 
-			// Atomically replace the destination file
-			if err := os.Rename(tmpPath, destPath); err != nil {
-				_ = os.Remove(tmpPath)
-				return "", fmt.Errorf("updater: rename to %q: %w", destPath, err)
+				// Atomically replace the destination file
+				if err := os.Rename(tmpPath, destPath); err != nil {
+					return fmt.Errorf("updater: rename to %q: %w", destPath, err)
+				}
+				return nil
+			}()
+
+			if err != nil {
+				return "", err
 			}
 
 			if baseName == spec.BinaryName {
@@ -391,7 +403,7 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 	}
 
 	symlinkPath := filepath.Join(binDir, appID)
-	tmpSymlinkPath := fmt.Sprintf("%s.tmp.%d", symlinkPath, time.Now().UnixNano())
+	tmpSymlinkPath := fmt.Sprintf("%s.tmp.%d.%d", symlinkPath, os.Getpid(), time.Now().UnixNano())
 
 	// Create temporary symlink
 	if err := os.Symlink(actualBinaryPath, tmpSymlinkPath); err != nil {
@@ -403,10 +415,10 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 		)
 		return
 	}
+	defer os.Remove(tmpSymlinkPath) // Safe cleanup on panic/early return
 
 	// Atomically rename it over the old one
 	if err := os.Rename(tmpSymlinkPath, symlinkPath); err != nil {
-		_ = os.Remove(tmpSymlinkPath)
 		slog.Warn("updater: failed to replace symlink atomically",
 			"app_id", appID,
 			"symlink", symlinkPath,
