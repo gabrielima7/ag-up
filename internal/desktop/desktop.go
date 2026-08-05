@@ -88,7 +88,8 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: close temp file %q: %w", tmpPath, err)
 	}
 
-	// Ensure the file is readable/writable by the user only.
+	// Ensure the file is readable by the desktop environment (0644).
+	// #nosec G302
 	if err := os.Chmod(tmpPath, 0644); err != nil {
 		return fmt.Errorf("desktop: chmod %q: %w", tmpPath, err)
 	}

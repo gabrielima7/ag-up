@@ -64,7 +64,7 @@ func EnsureDirectories(appIDs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(binDir, 0755); err != nil {
+	if err := os.MkdirAll(binDir, 0750); err != nil {
 		return fmt.Errorf("xdg: cannot create bin dir %q: %w", binDir, err)
 	}
 
@@ -72,7 +72,7 @@ func EnsureDirectories(appIDs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(appsDir, 0755); err != nil {
+	if err := os.MkdirAll(appsDir, 0750); err != nil {
 		return fmt.Errorf("xdg: cannot create applications dir %q: %w", appsDir, err)
 	}
 
@@ -81,7 +81,7 @@ func EnsureDirectories(appIDs []string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(dataDir, 0755); err != nil {
+		if err := os.MkdirAll(dataDir, 0750); err != nil {
 			return fmt.Errorf("xdg: cannot create data dir %q: %w", dataDir, err)
 		}
 	}
@@ -91,7 +91,7 @@ func EnsureDirectories(appIDs []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(manifestPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0750); err != nil {
 		return fmt.Errorf("xdg: cannot create manifest parent dir: %w", err)
 	}
 

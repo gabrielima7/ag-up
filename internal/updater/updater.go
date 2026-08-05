@@ -291,7 +291,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 		case tar.TypeDir:
 			// Create sub-directories inside dataDir.
 			dirPath := filepath.Join(dataDir, cleanName)
-			if err := os.MkdirAll(dirPath, 0755); err != nil {
+			if err := os.MkdirAll(dirPath, 0750); err != nil {
 				return "", fmt.Errorf("updater: mkdir %q: %w", dirPath, err)
 			}
 
@@ -305,7 +305,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 			} else {
 				destPath = filepath.Join(dataDir, cleanName)
 				// Ensure parent directory exists.
-				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
 					return "", fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
 				}
 			}
