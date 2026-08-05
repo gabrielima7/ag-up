@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"text/template"
-	"time"
 
 	"github.com/gabrielima7/GopherCore/guard"
 	"github.com/gabrielima7/ag-up/internal/config"
@@ -72,29 +71,30 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 	}
 
 	destPath := filepath.Join(appsDir, guard.SanitizeString(spec.ID)+".desktop")
-	tmpPath := fmt.Sprintf("%s.tmp.%d", destPath, time.Now().UnixNano())
 
-	f, err := os.Create(tmpPath)
+	dir, file := filepath.Split(destPath)
+	f, err := os.CreateTemp(dir, file+".tmp.*")
 	if err != nil {
-		return fmt.Errorf("desktop: create temp file %q: %w", tmpPath, err)
+		return fmt.Errorf("desktop: create temp file in %q: %w", dir, err)
 	}
+	tmpPath := f.Name()
+	defer os.Remove(tmpPath)
 
 	if err := tmpl.Execute(f, data); err != nil {
 		f.Close()
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("desktop: render %q: %w", tmpPath, err)
 	}
-	f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("desktop: close temp file %q: %w", tmpPath, err)
+	}
 
 	// Ensure the file is readable/writable by the user only.
 	if err := os.Chmod(tmpPath, 0644); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("desktop: chmod %q: %w", tmpPath, err)
 	}
 
 	// Atomically replace the destination file
 	if err := os.Rename(tmpPath, destPath); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("desktop: rename to %q: %w", destPath, err)
 	}
 

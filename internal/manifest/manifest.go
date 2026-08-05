@@ -7,6 +7,7 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -98,14 +99,27 @@ func Save(m *Manifest) error {
 	}
 
 	// Write to a uniquely-named temporary file first, then rename — atomic on Linux.
-	// This prevents conflicts if multiple ag-up processes run Save concurrently.
-	tmpPath := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	// os.CreateTemp prevents predictable filename collisions if multiple ag-up processes run concurrently.
+	dir, file := filepath.Split(path)
+	tmpFile, err := os.CreateTemp(dir, file+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("manifest: create temp file in %q: %w", dir, err)
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
 	}
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("manifest: close temp file %q: %w", tmpPath, err)
+	}
+	if err := os.Chmod(tmpPath, 0644); err != nil {
+		return fmt.Errorf("manifest: chmod temp file %q: %w", tmpPath, err)
+	}
+
 	if err := os.Rename(tmpPath, path); err != nil {
-		// Clean up temp file on rename failure.
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("manifest: rename to %q: %w", path, err)
 	}
 
