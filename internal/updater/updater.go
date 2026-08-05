@@ -456,6 +456,7 @@ func runPostInstallHook(ctx context.Context, spec config.AppSpec) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
+	// #nosec G204 — agyPath is constructed securely from XDG user bin directory.
 	cmd := exec.CommandContext(timeoutCtx, agyPath, "install")
 	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
