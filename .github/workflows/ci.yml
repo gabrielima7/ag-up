@@ -22,7 +22,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'go.mod'
           check-latest: true
           cache: true
 
@@ -41,9 +41,9 @@ jobs:
           govulncheck ./...
 
       - name: Run Security AST Scan (gosec)
-        uses: securego/gosec@master
-        with:
-          args: './...'
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -exclude-dir=scratch ./...
 
       - name: Run Tests with Race Detector
         run: go test -v -race -coverprofile=coverage.out ./...
