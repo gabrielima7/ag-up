@@ -72,7 +72,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 
 	removeOnExit := true
 	defer func() {
-		f.Close()
+		_ = f.Close()
 		if removeOnExit {
 			if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
 				slog.Warn("downloader: failed to remove temp file on error path",

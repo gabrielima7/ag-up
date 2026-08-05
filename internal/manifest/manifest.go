@@ -106,10 +106,10 @@ func Save(m *Manifest) error {
 		return fmt.Errorf("manifest: create temp file in %q: %w", dir, err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
 	}
 	if err := tmpFile.Close(); err != nil {

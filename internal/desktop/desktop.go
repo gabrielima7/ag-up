@@ -78,10 +78,10 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: create temp file in %q: %w", dir, err)
 	}
 	tmpPath := f.Name()
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	if err := tmpl.Execute(f, data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return fmt.Errorf("desktop: render %q: %w", tmpPath, err)
 	}
 	if err := f.Close(); err != nil {

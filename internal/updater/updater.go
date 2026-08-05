@@ -86,7 +86,7 @@ func verifySHA512(path, expected string) error {
 	if err != nil {
 		return fmt.Errorf("sha512: open %q: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha512.New()
 	if _, err := io.Copy(h, f); err != nil {
@@ -119,13 +119,13 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 	if err != nil {
 		return fmt.Errorf("updater: open tarball %q: %w", tarGzPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("updater: gzip reader: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 
@@ -171,14 +171,14 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 			if err != nil {
 				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 			}
-			defer os.Remove(tmpPath)
+			defer func() { _ = os.Remove(tmpPath) }()
 
 			// #nosec G110 — tarball size is capped by the download timeout.
 			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
+				_ = outFile.Close()
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
-			outFile.Close()
+			_ = outFile.Close()
 
 			if err := os.Chmod(tmpPath, 0755); err != nil {
 				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
@@ -244,7 +244,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	if err := os.RemoveAll(dataDir); err != nil {
 		return "", fmt.Errorf("updater: remove previous install dir %q: %w", dataDir, err)
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
 		return "", fmt.Errorf("updater: recreate install dir %q: %w", dataDir, err)
 	}
 
@@ -252,13 +252,13 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("updater: open tarball %q: %w", tarGzPath, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return "", fmt.Errorf("updater: gzip reader: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	tr := tar.NewReader(gz)
 
@@ -325,14 +325,14 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 				if err != nil {
 					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 				}
-				defer os.Remove(tmpPath)
+				defer func() { _ = os.Remove(tmpPath) }()
 
 				// #nosec G110 — tarball size is capped by the download timeout.
 				if _, err := io.Copy(outFile, tr); err != nil {
-					outFile.Close()
+					_ = outFile.Close()
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
-				outFile.Close()
+				_ = outFile.Close()
 
 				// Explicit chmod after write — safety net against umask stripping +x.
 				if err := os.Chmod(tmpPath, fileMode); err != nil {
@@ -415,7 +415,7 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 		)
 		return
 	}
-	defer os.Remove(tmpSymlinkPath) // Safe cleanup on panic/early return
+	defer func() { _ = os.Remove(tmpSymlinkPath) }() // Safe cleanup on panic/early return
 
 	// Atomically rename it over the old one
 	if err := os.Rename(tmpSymlinkPath, symlinkPath); err != nil {
@@ -538,7 +538,7 @@ func Update(
 		)
 		return result.Err[AppUpdateSummary](summary.Error)
 	}
-	defer os.Remove(tarGzPath)
+	defer func() { _ = os.Remove(tarGzPath) }()
 
 	// --- Step 3: SHA-512 security validation ---
 	if cr.ExpectedSHA512 != "" {
