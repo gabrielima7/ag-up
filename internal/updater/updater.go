@@ -299,15 +299,15 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 			baseName := filepath.Base(cleanName)
 			var destPath string
 
-			// The primary binary goes to ~/.local/bin/; everything else to dataDir.
-			if baseName == spec.BinaryName {
-				destPath = filepath.Join(binDir, baseName)
-			} else {
-				destPath = filepath.Join(dataDir, cleanName)
-				// Ensure parent directory exists.
-				if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
-					return "", fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
-				}
+			// All files (including the main binary) are extracted to dataDir.
+			// createGUISymlink is responsible for pointing ~/.local/bin/<app-id>
+			// at the binary inside dataDir — writing the binary directly to binDir
+			// would cause createGUISymlink to create a self-referential symlink,
+			// overwriting the real binary with a circular link.
+			destPath = filepath.Join(dataDir, cleanName)
+			// Ensure parent directory exists.
+			if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
+				return "", fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
 			}
 
 			// Preserve the exact file mode from the tar header.
@@ -365,9 +365,12 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 
 				// Accumulate candidates for phase 2 (loose match), excluding
 				// internal tool directories that must never be symlinked.
+				// Also exclude files that are inside binDir — those would create
+				// a self-referential symlink if selected as the main binary.
 				slashPath := filepath.ToSlash(cleanName)
 				if !strings.Contains(slashPath, "/resources/") &&
-					!strings.Contains(slashPath, "/locales/") {
+					!strings.Contains(slashPath, "/locales/") &&
+					!strings.HasPrefix(destPath, binDir+string(filepath.Separator)) {
 					candidateBinaries = append(candidateBinaries, destPath)
 				}
 			}
@@ -376,16 +379,34 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 
 	// Phase 2: loose match — triggered only when no "antigravity" binary was
 	// found (e.g. the IDE package ships its main binary as "antigravity-ide").
+	// We prefer entries NOT in a "bin/" subdirectory (those are usually wrapper
+	// scripts) and fall back to them only if no top-level match exists.
 	if actualBinaryPath == "" {
+		var fallback string
 		for _, p := range candidateBinaries {
-			if filepath.Base(p) == spec.ID {
+			if filepath.Base(p) != spec.BinaryName {
+				continue
+			}
+			// Prefer the top-level entry (not inside a "bin/" sub-directory).
+			rel, _ := filepath.Rel(dataDir, p)
+			if !strings.HasPrefix(filepath.ToSlash(rel), "bin/") {
 				actualBinaryPath = p
-				slog.Info("updater: main binary resolved via loose match",
+				slog.Info("updater: main binary resolved via loose match (top-level)",
 					"app_id", spec.ID,
 					"path", actualBinaryPath,
 				)
 				break
 			}
+			if fallback == "" {
+				fallback = p
+			}
+		}
+		if actualBinaryPath == "" && fallback != "" {
+			actualBinaryPath = fallback
+			slog.Info("updater: main binary resolved via loose match (fallback)",
+				"app_id", spec.ID,
+				"path", actualBinaryPath,
+			)
 		}
 	}
 
@@ -595,6 +616,13 @@ func Update(
 					"error", desktopErr,
 				)
 			}
+
+			// Update any legacy .desktop launchers (e.g. created by old official
+			// installers in ~/Desktop or ~/.local/share/applications/) so they
+			// also point to the symlink — using the symlink path guarantees no
+			// spaces in the Exec= value, preventing shell-splitting issues in
+			// desktop environments (XFCE, GNOME, KDE) that truncate unquoted paths.
+			desktop.SyncLegacyLaunchers(spec, symlinkPath)
 		}
 	}
 
