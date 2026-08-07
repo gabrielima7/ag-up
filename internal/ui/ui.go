@@ -53,42 +53,73 @@ func menu() {
 	fmt.Print(colorBold + "  → " + colorReset)
 }
 
+// interactiveReader manages a background goroutine for reading lines without leaking.
+type interactiveReader struct {
+	reader *bufio.Reader
+	reqCh  chan struct{}
+	resCh  chan string
+}
+
+func newInteractiveReader(r *bufio.Reader) *interactiveReader {
+	ir := &interactiveReader{
+		reader: r,
+		reqCh:  make(chan struct{}, 1),
+		resCh:  make(chan string, 1),
+	}
+	go func() {
+		for range ir.reqCh {
+			line, _ := ir.reader.ReadString('\n')
+			ir.resCh <- line
+		}
+	}()
+	return ir
+}
+
 // readLine reads a single line from reader, aggressively trimming all leading
 // and trailing whitespace including \r\n (important for TTY and piped input).
 // Returns an empty string on EOF, read error, or context cancellation.
-func readLine(ctx context.Context, reader *bufio.Reader) string {
-	type readResult struct {
-		line string
-		err  error
+func (ir *interactiveReader) readLine(ctx context.Context) string {
+	// Drain stale input from a previously cancelled request
+	select {
+	case <-ir.resCh:
+	default:
 	}
-	ch := make(chan readResult, 1)
-	go func() {
-		line, err := reader.ReadString('\n')
-		ch <- readResult{line, err}
-	}()
+
+	// Request read
+	select {
+	case ir.reqCh <- struct{}{}:
+	default:
+	}
 
 	select {
 	case <-ctx.Done():
 		return ""
-	case res := <-ch:
-		return strings.TrimSpace(res.line)
+	case line := <-ir.resCh:
+		return strings.TrimSpace(line)
 	}
 }
 
 // pressEnterToContinue blocks until the user presses Enter, preventing the
 // menu loop from instantly redrawing and pushing result tables off-screen.
 // It accepts the context to avoid blocking forever if a shutdown signal is received.
-func pressEnterToContinue(ctx context.Context, reader *bufio.Reader) {
+func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 	fmt.Print("\nPress [Enter] to return to the menu...")
-	ch := make(chan struct{}, 1)
-	go func() {
-		_, _ = reader.ReadBytes('\n')
-		ch <- struct{}{}
-	}()
+
+	// Drain stale input from a previously cancelled request
+	select {
+	case <-ir.resCh:
+	default:
+	}
+
+	// Request read
+	select {
+	case ir.reqCh <- struct{}{}:
+	default:
+	}
 
 	select {
 	case <-ctx.Done():
-	case <-ch:
+	case <-ir.resCh:
 	}
 }
 
@@ -223,7 +254,7 @@ func RunInteractiveMenu(
 	maxRetries int,
 	version string,
 ) error {
-	reader := bufio.NewReader(os.Stdin)
+	ir := newInteractiveReader(bufio.NewReader(os.Stdin))
 	allSpecs := config.All()
 
 	for {
@@ -236,7 +267,7 @@ func RunInteractiveMenu(
 		banner(version)
 		menu()
 
-		choice := readLine(ctx, reader)
+		choice := ir.readLine(ctx)
 
 		// Check for context cancellation after blocking on readLine
 		if ctx.Err() != nil {
@@ -254,7 +285,7 @@ func RunInteractiveMenu(
 				continue
 			}
 			PrintCheckResults(results)
-			pressEnterToContinue(ctx, reader)
+			ir.pressEnterToContinue(ctx)
 
 		case "2":
 			// Update all apps concurrently.
@@ -266,7 +297,7 @@ func RunInteractiveMenu(
 				continue
 			}
 			PrintUpdateResults(results)
-			pressEnterToContinue(ctx, reader)
+			ir.pressEnterToContinue(ctx)
 
 		case "3":
 			// Update only the CLI.
@@ -274,7 +305,7 @@ func RunInteractiveMenu(
 			fmt.Println(colorCyan + "  Updating Antigravity CLI (agy)..." + colorReset)
 			r := updater.Update(ctx, config.CLIApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
-			pressEnterToContinue(ctx, reader)
+			ir.pressEnterToContinue(ctx)
 
 		case "4":
 			// Update only the IDE.
@@ -282,7 +313,7 @@ func RunInteractiveMenu(
 			fmt.Println(colorCyan + "  Updating Antigravity IDE..." + colorReset)
 			r := updater.Update(ctx, config.IDEApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
-			pressEnterToContinue(ctx, reader)
+			ir.pressEnterToContinue(ctx)
 
 		case "5":
 			// Update only the Hub.
@@ -290,7 +321,7 @@ func RunInteractiveMenu(
 			fmt.Println(colorCyan + "  Updating Antigravity Hub (2.0)..." + colorReset)
 			r := updater.Update(ctx, config.HubApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
-			pressEnterToContinue(ctx, reader)
+			ir.pressEnterToContinue(ctx)
 
 		case "6", "q", "Q", "exit":
 			fmt.Println()
