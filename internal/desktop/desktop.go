@@ -81,7 +81,7 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: create temp file in %q: %w", dir, err)
 	}
 	tmpPath := f.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
+	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
 	if err := tmpl.Execute(f, data); err != nil {
 		_ = f.Close()
@@ -168,7 +168,7 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 
 	// Also check XDG_DESKTOP_DIR if set.
 	if xdgDesktop := os.Getenv("XDG_DESKTOP_DIR"); xdgDesktop != "" {
-		if info, err := os.Stat(xdgDesktop); err == nil && info.IsDir() {
+		if info, err := os.Stat(filepath.Clean(xdgDesktop)); err == nil && info.IsDir() {
 			scanDirs = append(scanDirs, xdgDesktop)
 		}
 	}
@@ -198,6 +198,7 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 // legacy launcher for spec, and rewrites the Exec= line if needed.
 // Returns true if the file was modified.
 func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath string) bool {
+	path = filepath.Clean(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -260,7 +261,7 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 		return false
 	}
 	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
+	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
 	if _, err := tmp.WriteString(newContent); err != nil {
 		_ = tmp.Close()
