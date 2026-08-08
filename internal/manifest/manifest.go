@@ -84,13 +84,16 @@ func Load() (*Manifest, error) {
 // Save serialises the manifest to disk, atomically replacing the previous
 // version via a write-and-rename strategy to prevent partial writes.
 func Save(m *Manifest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return saveLocked(m)
+}
+
+func saveLocked(m *Manifest) error {
 	path, err := xdg.ManifestPath()
 	if err != nil {
 		return fmt.Errorf("manifest: resolve path: %w", err)
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	m.UpdatedAt = time.Now()
 	data, err := jsonutil.Marshal(m)
@@ -140,8 +143,8 @@ func Get(m *Manifest, appID string) (AppEntry, bool) {
 func Set(m *Manifest, appID string, entry AppEntry) error {
 	m.mu.Lock()
 	m.Apps[appID] = entry
-	m.mu.Unlock()
-	return Save(m)
+	defer m.mu.Unlock()
+	return saveLocked(m)
 }
 
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
@@ -154,8 +157,8 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 		entry.ETag = etag
 	}
 	m.Apps[appID] = entry
-	m.mu.Unlock()
-	return Save(m)
+	defer m.mu.Unlock()
+	return saveLocked(m)
 }
 
 // MarkInstalled records a successful installation of version for appID,
@@ -168,6 +171,6 @@ func MarkInstalled(m *Manifest, appID, version, etag string) error {
 	entry.LastChecked = time.Now()
 	entry.LastUpdated = time.Now()
 	m.Apps[appID] = entry
-	m.mu.Unlock()
-	return Save(m)
+	defer m.mu.Unlock()
+	return saveLocked(m)
 }
