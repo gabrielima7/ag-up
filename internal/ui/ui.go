@@ -82,6 +82,11 @@ func newInteractiveReader(r *bufio.Reader) *interactiveReader {
 	return ir
 }
 
+// Close gracefully terminates the background goroutine.
+func (ir *interactiveReader) Close() {
+	close(ir.reqCh)
+}
+
 // readLine reads a single line from reader, aggressively trimming all leading
 // and trailing whitespace including \r\n (important for TTY and piped input).
 // Returns an empty string on EOF, read error, or context cancellation.
@@ -268,6 +273,7 @@ func RunInteractiveMenu(
 	version string,
 ) error {
 	ir := newInteractiveReader(bufio.NewReader(os.Stdin))
+	defer ir.Close()
 	allSpecs := config.All()
 
 	for {
