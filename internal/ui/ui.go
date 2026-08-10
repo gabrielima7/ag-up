@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/gabrielima7/GopherCore/result"
 	"github.com/gabrielima7/ag-up/internal/checker"
@@ -28,8 +29,12 @@ const (
 	colorGray   = "\033[90m"
 )
 
+var printMu sync.Mutex
+
 // banner prints the ag-up ASCII art header.
 func banner(version string) {
+	printMu.Lock()
+	defer printMu.Unlock()
 	verStr := "v" + strings.TrimPrefix(version, "v")
 	fmt.Println()
 	fmt.Println(colorCyan + colorBold + "  ╔═══════════════════════════════════════════════╗" + colorReset)
@@ -41,6 +46,8 @@ func banner(version string) {
 
 // menu prints the interactive menu options.
 func menu() {
+	printMu.Lock()
+	defer printMu.Unlock()
 	fmt.Println(colorBold + "  Choose an option:" + colorReset)
 	fmt.Println()
 	fmt.Println("    " + colorCyan + "1)" + colorReset + " Check for updates          (dry-run)")
@@ -103,7 +110,9 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 // menu loop from instantly redrawing and pushing result tables off-screen.
 // It accepts the context to avoid blocking forever if a shutdown signal is received.
 func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
+	printMu.Lock()
 	fmt.Print("\nPress [Enter] to return to the menu...")
+	printMu.Unlock()
 
 	// Drain stale input from a previously cancelled request
 	select {
@@ -125,6 +134,8 @@ func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 
 // PrintCheckResults renders a formatted table of version check results.
 func PrintCheckResults(results []result.Result[checker.CheckResult]) {
+	printMu.Lock()
+	defer printMu.Unlock()
 	fmt.Println()
 	fmt.Println(colorBold + "  ┌─────────────────────────────────────────────────────────────┐" + colorReset)
 	fmt.Println(colorBold + "  │                    VERSION CHECK REPORT                     │" + colorReset)
@@ -177,6 +188,8 @@ func PrintCheckResults(results []result.Result[checker.CheckResult]) {
 
 // PrintUpdateResults renders a formatted summary of update outcomes.
 func PrintUpdateResults(results []result.Result[updater.AppUpdateSummary]) {
+	printMu.Lock()
+	defer printMu.Unlock()
 	fmt.Println()
 	fmt.Println(colorBold + "  ┌─────────────────────────────────────────────────────────────┐" + colorReset)
 	fmt.Println(colorBold + "  │                      UPDATE REPORT                          │" + colorReset)
