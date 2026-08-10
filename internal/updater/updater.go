@@ -237,16 +237,12 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 		return "", fmt.Errorf("updater: resolve data dir: %w", err)
 	}
 
-	// --- Clean installation wipe ---
-	// Remove the previous version directory entirely so that files deleted or
-	// moved in the new release do not persist as ghost entries.
-	slog.Info("updater: wiping previous installation directory", "app_id", spec.ID, "path", dataDir)
-	if err := os.RemoveAll(dataDir); err != nil {
-		return "", fmt.Errorf("updater: remove previous install dir %q: %w", dataDir, err)
+	// Extract to a uniquely-named temporary directory first for atomic replacement.
+	tmpDataDir := fmt.Sprintf("%s.tmp.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
+	if err := os.MkdirAll(tmpDataDir, 0750); err != nil {
+		return "", fmt.Errorf("updater: create temp install dir %q: %w", tmpDataDir, err)
 	}
-	if err := os.MkdirAll(dataDir, 0750); err != nil {
-		return "", fmt.Errorf("updater: recreate install dir %q: %w", dataDir, err)
-	}
+	defer func() { _ = os.RemoveAll(tmpDataDir) }()
 
 	f, err := os.Open(tarGzPath)
 	if err != nil {
@@ -289,8 +285,8 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			// Create sub-directories inside dataDir.
-			dirPath := filepath.Join(dataDir, cleanName)
+			// Create sub-directories inside tmpDataDir.
+			dirPath := filepath.Join(tmpDataDir, cleanName)
 			if err := os.MkdirAll(dirPath, 0750); err != nil {
 				return "", fmt.Errorf("updater: mkdir %q: %w", dirPath, err)
 			}
@@ -299,12 +295,12 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 			baseName := filepath.Base(cleanName)
 			var destPath string
 
-			// All files (including the main binary) are extracted to dataDir.
+			// All files (including the main binary) are extracted to tmpDataDir.
 			// createGUISymlink is responsible for pointing ~/.local/bin/<app-id>
 			// at the binary inside dataDir — writing the binary directly to binDir
 			// would cause createGUISymlink to create a self-referential symlink,
 			// overwriting the real binary with a circular link.
-			destPath = filepath.Join(dataDir, cleanName)
+			destPath = filepath.Join(tmpDataDir, cleanName)
 			// Ensure parent directory exists.
 			if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
 				return "", fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
@@ -388,7 +384,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 				continue
 			}
 			// Prefer the top-level entry (not inside a "bin/" sub-directory).
-			rel, _ := filepath.Rel(dataDir, p)
+			rel, _ := filepath.Rel(tmpDataDir, p)
 			if !strings.HasPrefix(filepath.ToSlash(rel), "bin/") {
 				actualBinaryPath = p
 				slog.Info("updater: main binary resolved via loose match (top-level)",
@@ -407,6 +403,19 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 				"app_id", spec.ID,
 				"path", actualBinaryPath,
 			)
+		}
+	}
+
+	// Atomically replace dataDir with tmpDataDir
+	_ = os.RemoveAll(dataDir)
+	if err := os.Rename(tmpDataDir, dataDir); err != nil {
+		return "", fmt.Errorf("updater: rename temp dir to %q: %w", dataDir, err)
+	}
+
+	// Adjust actualBinaryPath to point to the new location
+	if actualBinaryPath != "" {
+		if rel, err := filepath.Rel(tmpDataDir, actualBinaryPath); err == nil {
+			actualBinaryPath = filepath.Join(dataDir, rel)
 		}
 	}
 
