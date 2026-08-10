@@ -38,6 +38,7 @@ import (
 	"github.com/gabrielima7/ag-up/internal/checker"
 	"github.com/gabrielima7/ag-up/internal/config"
 	"github.com/gabrielima7/ag-up/internal/manifest"
+	"github.com/gabrielima7/ag-up/internal/printer"
 	"github.com/gabrielima7/ag-up/internal/ui"
 	"github.com/gabrielima7/ag-up/internal/updater"
 	"github.com/gabrielima7/ag-up/pkg/xdg"
@@ -79,9 +80,9 @@ func main() {
 	// --version: print and exit immediately (before logger init).
 	// -----------------------------------------------------------------------
 	if *flagVersion {
-		fmt.Printf("ag-up version %s\n", Version)
-		fmt.Println("Google Antigravity Universal Updater")
-		fmt.Println("https://github.com/gabrielima7/ag-up")
+		printer.Printf("ag-up version %s\n", Version)
+		printer.Println("Google Antigravity Universal Updater")
+		printer.Println("https://github.com/gabrielima7/ag-up")
 		os.Exit(0)
 	}
 
@@ -196,7 +197,7 @@ func runFlagMode(
 			specs = selectedSpecs(cli, ide, hub)
 		}
 
-		fmt.Println("\n  Checking versions…")
+		printer.Println("\n  Checking versions…")
 		results, err := checker.CheckAll(ctx, specs, m, maxRetries)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ag-up: check failed: %v\n", err)
@@ -221,7 +222,7 @@ func runFlagMode(
 		specs = selectedSpecs(cli, ide, hub)
 	}
 
-	fmt.Printf("\n  Updating %d application(s)…\n", len(specs))
+	printer.Printf("\n  Updating %d application(s)…\n", len(specs))
 
 	var updateResults []result.Result[updater.AppUpdateSummary]
 

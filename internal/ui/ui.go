@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 
 	"github.com/gabrielima7/GopherCore/result"
 	"github.com/gabrielima7/ag-up/internal/checker"
 	"github.com/gabrielima7/ag-up/internal/config"
 	"github.com/gabrielima7/ag-up/internal/manifest"
+	"github.com/gabrielima7/ag-up/internal/printer"
 	"github.com/gabrielima7/ag-up/internal/updater"
 )
 
@@ -29,35 +29,29 @@ const (
 	colorGray   = "\033[90m"
 )
 
-var printMu sync.Mutex
-
 // banner prints the ag-up ASCII art header.
 func banner(version string) {
-	printMu.Lock()
-	defer printMu.Unlock()
 	verStr := "v" + strings.TrimPrefix(version, "v")
-	fmt.Println()
-	fmt.Println(colorCyan + colorBold + "  ╔═══════════════════════════════════════════════╗" + colorReset)
-	fmt.Println(colorCyan + colorBold + "  ║       ag-up · Google Antigravity Updater      ║" + colorReset)
-	fmt.Printf(colorCyan+colorBold+"  ║              Universal Updater %-15s║\n"+colorReset, verStr+" ")
-	fmt.Println(colorCyan + colorBold + "  ╚═══════════════════════════════════════════════╝" + colorReset)
-	fmt.Println()
+	printer.Println()
+	printer.Println(colorCyan + colorBold + "  ╔═══════════════════════════════════════════════╗" + colorReset)
+	printer.Println(colorCyan + colorBold + "  ║       ag-up · Google Antigravity Updater      ║" + colorReset)
+	printer.Printf(colorCyan+colorBold+"  ║              Universal Updater %-15s║\n"+colorReset, verStr+" ")
+	printer.Println(colorCyan + colorBold + "  ╚═══════════════════════════════════════════════╝" + colorReset)
+	printer.Println()
 }
 
 // menu prints the interactive menu options.
 func menu() {
-	printMu.Lock()
-	defer printMu.Unlock()
-	fmt.Println(colorBold + "  Choose an option:" + colorReset)
-	fmt.Println()
-	fmt.Println("    " + colorCyan + "1)" + colorReset + " Check for updates          (dry-run)")
-	fmt.Println("    " + colorCyan + "2)" + colorReset + " Update All                 (parallel)")
-	fmt.Println("    " + colorCyan + "3)" + colorReset + " Update Antigravity CLI     (agy)")
-	fmt.Println("    " + colorCyan + "4)" + colorReset + " Update Antigravity IDE")
-	fmt.Println("    " + colorCyan + "5)" + colorReset + " Update Antigravity Hub     (2.0)")
-	fmt.Println("    " + colorCyan + "6)" + colorReset + " Exit")
-	fmt.Println()
-	fmt.Print(colorBold + "  → " + colorReset)
+	printer.Println(colorBold + "  Choose an option:" + colorReset)
+	printer.Println()
+	printer.Println("    " + colorCyan + "1)" + colorReset + " Check for updates          (dry-run)")
+	printer.Println("    " + colorCyan + "2)" + colorReset + " Update All                 (parallel)")
+	printer.Println("    " + colorCyan + "3)" + colorReset + " Update Antigravity CLI     (agy)")
+	printer.Println("    " + colorCyan + "4)" + colorReset + " Update Antigravity IDE")
+	printer.Println("    " + colorCyan + "5)" + colorReset + " Update Antigravity Hub     (2.0)")
+	printer.Println("    " + colorCyan + "6)" + colorReset + " Exit")
+	printer.Println()
+	printer.Print(colorBold + "  → " + colorReset)
 }
 
 // interactiveReader manages a background goroutine for reading lines without leaking.
@@ -115,9 +109,7 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 // menu loop from instantly redrawing and pushing result tables off-screen.
 // It accepts the context to avoid blocking forever if a shutdown signal is received.
 func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
-	printMu.Lock()
-	fmt.Print("\nPress [Enter] to return to the menu...")
-	printMu.Unlock()
+	printer.Print("\nPress [Enter] to return to the menu...")
 
 	// Drain stale input from a previously cancelled request
 	select {
@@ -139,24 +131,22 @@ func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 
 // PrintCheckResults renders a formatted table of version check results.
 func PrintCheckResults(results []result.Result[checker.CheckResult]) {
-	printMu.Lock()
-	defer printMu.Unlock()
-	fmt.Println()
-	fmt.Println(colorBold + "  ┌─────────────────────────────────────────────────────────────┐" + colorReset)
-	fmt.Println(colorBold + "  │                    VERSION CHECK REPORT                     │" + colorReset)
-	fmt.Println(colorBold + "  └─────────────────────────────────────────────────────────────┘" + colorReset)
-	fmt.Println()
-	fmt.Printf("  %-28s %-14s %-14s %s\n",
+	printer.Println()
+	printer.Println(colorBold + "  ┌─────────────────────────────────────────────────────────────┐" + colorReset)
+	printer.Println(colorBold + "  │                    VERSION CHECK REPORT                     │" + colorReset)
+	printer.Println(colorBold + "  └─────────────────────────────────────────────────────────────┘" + colorReset)
+	printer.Println()
+	printer.Printf("  %-28s %-14s %-14s %s\n",
 		colorBold+"Application"+colorReset,
 		colorBold+"Installed"+colorReset,
 		colorBold+"Latest"+colorReset,
 		colorBold+"Status"+colorReset,
 	)
-	fmt.Println("  " + strings.Repeat("─", 65))
+	printer.Println("  " + strings.Repeat("─", 65))
 
 	for _, r := range results {
 		if r.IsErr() {
-			fmt.Printf("  %-28s %-14s %-14s %s\n",
+			printer.Printf("  %-28s %-14s %-14s %s\n",
 				colorRed+"[error]"+colorReset,
 				"—",
 				"—",
@@ -181,43 +171,41 @@ func PrintCheckResults(results []result.Result[checker.CheckResult]) {
 			statusStr = colorGray + "✓ up-to-date" + colorReset
 		}
 
-		fmt.Printf("  %-28s %-14s %-14s %s\n",
+		printer.Printf("  %-28s %-14s %-14s %s\n",
 			cr.AppName,
 			localVer,
 			cr.RemoteVersion,
 			statusStr,
 		)
 	}
-	fmt.Println()
+	printer.Println()
 }
 
 // PrintUpdateResults renders a formatted summary of update outcomes.
 func PrintUpdateResults(results []result.Result[updater.AppUpdateSummary]) {
-	printMu.Lock()
-	defer printMu.Unlock()
-	fmt.Println()
-	fmt.Println(colorBold + "  ┌─────────────────────────────────────────────────────────────┐" + colorReset)
-	fmt.Println(colorBold + "  │                      UPDATE REPORT                          │" + colorReset)
-	fmt.Println(colorBold + "  └─────────────────────────────────────────────────────────────┘" + colorReset)
-	fmt.Println()
-	fmt.Printf("  %-28s %-14s %-14s %s\n",
+	printer.Println()
+	printer.Println(colorBold + "  ┌─────────────────────────────────────────────────────────────┐" + colorReset)
+	printer.Println(colorBold + "  │                      UPDATE REPORT                          │" + colorReset)
+	printer.Println(colorBold + "  └─────────────────────────────────────────────────────────────┘" + colorReset)
+	printer.Println()
+	printer.Printf("  %-28s %-14s %-14s %s\n",
 		colorBold+"Application"+colorReset,
 		colorBold+"Before"+colorReset,
 		colorBold+"After"+colorReset,
 		colorBold+"Status"+colorReset,
 	)
-	fmt.Println("  " + strings.Repeat("─", 65))
+	printer.Println("  " + strings.Repeat("─", 65))
 
 	successCount, skipCount, failCount := 0, 0, 0
 
 	for _, r := range results {
 		if r.IsErr() {
 			failCount++
-			fmt.Printf("  %-28s %-14s %-14s %s\n",
+			printer.Printf("  %-28s %-14s %-14s %s\n",
 				colorRed+"[error]"+colorReset, "—", "—",
 				colorRed+"✗ failed"+colorReset,
 			)
-			fmt.Printf("       %s%s%s\n", colorRed, r.Error().Error(), colorReset)
+			printer.Printf("       %s%s%s\n", colorRed, r.Error().Error(), colorReset)
 			continue
 		}
 
@@ -231,33 +219,33 @@ func PrintUpdateResults(results []result.Result[updater.AppUpdateSummary]) {
 		switch {
 		case s.Skipped:
 			skipCount++
-			fmt.Printf("  %-28s %-14s %-14s %s\n",
+			printer.Printf("  %-28s %-14s %-14s %s\n",
 				s.AppName, oldVer, s.NewVersion,
 				colorGray+"↔ skipped (up-to-date)"+colorReset,
 			)
 		case s.Success:
 			successCount++
-			fmt.Printf("  %-28s %-14s %-14s %s\n",
+			printer.Printf("  %-28s %-14s %-14s %s\n",
 				s.AppName, oldVer, s.NewVersion,
 				colorGreen+"✓ updated"+colorReset,
 			)
 		default:
 			failCount++
-			fmt.Printf("  %-28s %-14s %-14s %s\n",
+			printer.Printf("  %-28s %-14s %-14s %s\n",
 				s.AppName, oldVer, "—",
 				colorRed+"✗ failed"+colorReset,
 			)
 			if s.Error != nil {
-				fmt.Printf("       %s%s%s\n", colorRed, s.Error.Error(), colorReset)
+				printer.Printf("       %s%s%s\n", colorRed, s.Error.Error(), colorReset)
 			}
 		}
 	}
 
-	fmt.Println()
-	fmt.Printf("  %sTotal:%s %d updated · %d skipped · %d failed\n",
+	printer.Println()
+	printer.Printf("  %sTotal:%s %d updated · %d skipped · %d failed\n",
 		colorBold, colorReset, successCount, skipCount, failCount,
 	)
-	fmt.Println()
+	printer.Println()
 }
 
 // RunInteractiveMenu displays the main menu loop until the user chooses to
@@ -296,8 +284,8 @@ func RunInteractiveMenu(
 		switch choice {
 		case "1":
 			// Dry-run check for all apps.
-			fmt.Println()
-			fmt.Println(colorCyan + "  Checking versions (this may take a moment)..." + colorReset)
+			printer.Println()
+			printer.Println(colorCyan + "  Checking versions (this may take a moment)..." + colorReset)
 			results, err := checker.CheckAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
@@ -308,8 +296,8 @@ func RunInteractiveMenu(
 
 		case "2":
 			// Update all apps concurrently.
-			fmt.Println()
-			fmt.Println(colorCyan + "  Updating all applications..." + colorReset)
+			printer.Println()
+			printer.Println(colorCyan + "  Updating all applications..." + colorReset)
 			results, err := updater.UpdateAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
@@ -320,36 +308,36 @@ func RunInteractiveMenu(
 
 		case "3":
 			// Update only the CLI.
-			fmt.Println()
-			fmt.Println(colorCyan + "  Updating Antigravity CLI (agy)..." + colorReset)
+			printer.Println()
+			printer.Println(colorCyan + "  Updating Antigravity CLI (agy)..." + colorReset)
 			r := updater.Update(ctx, config.CLIApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
 			ir.pressEnterToContinue(ctx)
 
 		case "4":
 			// Update only the IDE.
-			fmt.Println()
-			fmt.Println(colorCyan + "  Updating Antigravity IDE..." + colorReset)
+			printer.Println()
+			printer.Println(colorCyan + "  Updating Antigravity IDE..." + colorReset)
 			r := updater.Update(ctx, config.IDEApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
 			ir.pressEnterToContinue(ctx)
 
 		case "5":
 			// Update only the Hub.
-			fmt.Println()
-			fmt.Println(colorCyan + "  Updating Antigravity Hub (2.0)..." + colorReset)
+			printer.Println()
+			printer.Println(colorCyan + "  Updating Antigravity Hub (2.0)..." + colorReset)
 			r := updater.Update(ctx, config.HubApp, m, maxRetries)
 			PrintUpdateResults([]result.Result[updater.AppUpdateSummary]{r})
 			ir.pressEnterToContinue(ctx)
 
 		case "6", "q", "Q", "exit":
-			fmt.Println()
-			fmt.Println(colorGray + "  Goodbye." + colorReset)
-			fmt.Println()
+			printer.Println()
+			printer.Println(colorGray + "  Goodbye." + colorReset)
+			printer.Println()
 			return nil
 
 		default:
-			fmt.Printf("\n  %sInvalid choice %q — please enter 1–6.%s\n\n",
+			printer.Printf("\n  %sInvalid choice %q — please enter 1–6.%s\n\n",
 				colorYellow, choice, colorReset,
 			)
 		}
