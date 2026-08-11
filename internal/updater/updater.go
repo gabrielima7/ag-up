@@ -19,7 +19,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gabrielima7/GopherCore/async"
@@ -29,19 +28,15 @@ import (
 	"github.com/gabrielima7/ag-up/internal/config"
 	"github.com/gabrielima7/ag-up/internal/desktop"
 	"github.com/gabrielima7/ag-up/internal/manifest"
+	"github.com/gabrielima7/ag-up/internal/printer"
 	"github.com/gabrielima7/ag-up/pkg/xdg"
 )
 
 // Version is the current ag-up release version.
 const Version = "v0.1.0"
 
-// printMu synchronizes stdout access to prevent interleaved printing during parallel updates.
-var printMu sync.Mutex
-
 func safePrint(format string, a ...any) {
-	printMu.Lock()
-	defer printMu.Unlock()
-	fmt.Printf(format, a...)
+	printer.Printf(format, a...)
 }
 
 // AppUpdateSummary is the outcome of a single application update attempt.
@@ -185,6 +180,7 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 			}
 
 			// Atomically replace the destination file
+			_ = os.Remove(destPath)
 			if err := os.Rename(tmpPath, destPath); err != nil {
 				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
@@ -336,6 +332,7 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 				}
 
 				// Atomically replace the destination file
+				_ = os.Remove(destPath)
 				if err := os.Rename(tmpPath, destPath); err != nil {
 					return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 				}
@@ -407,9 +404,26 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	}
 
 	// Atomically replace dataDir with tmpDataDir
-	_ = os.RemoveAll(dataDir)
+	backupDir := fmt.Sprintf("%s.backup.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
+	hasOld := true
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		hasOld = false
+	}
+	if hasOld {
+		if err := os.Rename(dataDir, backupDir); err != nil {
+			return "", fmt.Errorf("updater: backup old data dir: %w", err)
+		}
+	}
+
 	if err := os.Rename(tmpDataDir, dataDir); err != nil {
+		if hasOld {
+			_ = os.Rename(backupDir, dataDir)
+		}
 		return "", fmt.Errorf("updater: rename temp dir to %q: %w", dataDir, err)
+	}
+
+	if hasOld {
+		_ = os.RemoveAll(backupDir)
 	}
 
 	// Adjust actualBinaryPath to point to the new location

@@ -24,8 +24,15 @@ func TestUpdateAllChaosRace(t *testing.T) {
 
 	// Spin up a dummy HTTP server for checker
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"version": "1.2.3", "url": "http://example.com/agy.tar.gz", "sha512": ""}`)
+		if r.URL.Path == "/manifest.json" {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"version": "1.2.3", "url": "http://%s/agy.tar.gz", "sha512": ""}`+"\n", r.Host)
+			return
+		}
+		if r.URL.Path == "/agy.tar.gz" {
+			w.Write([]byte("fake tarball data"))
+			return
+		}
 	}))
 	defer ts.Close()
 
@@ -34,7 +41,7 @@ func TestUpdateAllChaosRace(t *testing.T) {
 			ID:               "agy",
 			Name:             "Google Antigravity CLI",
 			BinaryName:       "agy",
-			ManifestURL:      ts.URL,
+			ManifestURL:      ts.URL + "/manifest.json",
 			TarballInnerName: "antigravity",
 			IsGUI:            false,
 		},
@@ -42,7 +49,7 @@ func TestUpdateAllChaosRace(t *testing.T) {
 			ID:               "agy2",
 			Name:             "Google Antigravity CLI 2",
 			BinaryName:       "agy2",
-			ManifestURL:      ts.URL,
+			ManifestURL:      ts.URL + "/manifest.json",
 			TarballInnerName: "antigravity",
 			IsGUI:            false,
 		},
@@ -50,7 +57,7 @@ func TestUpdateAllChaosRace(t *testing.T) {
 			ID:               "agy3",
 			Name:             "Google Antigravity CLI 3",
 			BinaryName:       "agy3",
-			ManifestURL:      ts.URL,
+			ManifestURL:      ts.URL + "/manifest.json",
 			TarballInnerName: "antigravity",
 			IsGUI:            false,
 		},
