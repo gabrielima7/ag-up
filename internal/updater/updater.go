@@ -104,7 +104,7 @@ func verifySHA512(path, expected string) error {
 // and writes it to ~/.local/bin/<spec.BinaryName> with 0755 permissions.
 // This handles the CLI quirk where the tarball contains "antigravity" but must
 // be installed as "agy".
-func extractCLI(tarGzPath string, spec config.AppSpec) error {
+func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) error {
 	binDir, err := xdg.BinDir()
 	if err != nil {
 		return fmt.Errorf("updater: resolve bin dir: %w", err)
@@ -131,6 +131,11 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 
 	found := false
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -180,7 +185,6 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 			}
 
 			// Atomically replace the destination file
-			_ = os.Remove(destPath)
 			if err := os.Rename(tmpPath, destPath); err != nil {
 				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
@@ -223,7 +227,7 @@ func extractCLI(tarGzPath string, spec config.AppSpec) error {
 // Returns the absolute path to the discovered main binary, which the caller
 // uses to create the ~/.local/bin/<app-id> symlink. Returns an empty string if
 // no suitable binary is found.
-func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
+func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpec) (string, error) {
 	binDir, err := xdg.BinDir()
 	if err != nil {
 		return "", fmt.Errorf("updater: resolve bin dir: %w", err)
@@ -264,6 +268,11 @@ func extractAndInstall(tarGzPath string, spec config.AppSpec) (string, error) {
 	var candidateBinaries []string
 
 	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
@@ -605,11 +614,11 @@ func Update(
 	var actualBinaryPath string
 	if spec.TarballInnerName != "" {
 		// CLI path: extract only the named binary, rename to BinaryName.
-		installErr = extractCLI(tarGzPath, spec)
+		installErr = extractCLI(ctx, tarGzPath, spec)
 	} else {
 		// IDE / Hub path: generic multi-file extraction.
 		// Returns the detected path to the main Electron binary for symlink creation.
-		actualBinaryPath, installErr = extractAndInstall(tarGzPath, spec)
+		actualBinaryPath, installErr = extractAndInstall(ctx, tarGzPath, spec)
 	}
 
 	if installErr != nil {

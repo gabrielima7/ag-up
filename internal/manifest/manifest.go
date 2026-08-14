@@ -142,8 +142,8 @@ func Get(m *Manifest, appID string) (AppEntry, bool) {
 // disk immediately. Returns an error if the save fails.
 func Set(m *Manifest, appID string, entry AppEntry) error {
 	m.mu.Lock()
-	m.Apps[appID] = entry
 	defer m.mu.Unlock()
+	m.Apps[appID] = entry
 	return saveLocked(m)
 }
 
@@ -151,13 +151,13 @@ func Set(m *Manifest, appID string, entry AppEntry) error {
 // modifying the InstalledVersion, then saves the manifest.
 func MarkChecked(m *Manifest, appID, etag string) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	entry := m.Apps[appID]
 	entry.LastChecked = time.Now()
 	if etag != "" {
 		entry.ETag = etag
 	}
 	m.Apps[appID] = entry
-	defer m.mu.Unlock()
 	return saveLocked(m)
 }
 
@@ -165,12 +165,12 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 // updating both InstalledVersion and LastUpdated.
 func MarkInstalled(m *Manifest, appID, version, etag string) error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	entry := m.Apps[appID]
 	entry.InstalledVersion = version
 	entry.ETag = etag
 	entry.LastChecked = time.Now()
 	entry.LastUpdated = time.Now()
 	m.Apps[appID] = entry
-	defer m.mu.Unlock()
 	return saveLocked(m)
 }
