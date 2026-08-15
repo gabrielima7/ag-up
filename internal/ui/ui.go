@@ -61,16 +61,49 @@ type interactiveReader struct {
 	resCh  chan string
 }
 
-func newInteractiveReader(r *bufio.Reader) *interactiveReader {
+func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveReader {
 	ir := &interactiveReader{
 		reader: r,
 		reqCh:  make(chan struct{}, 1),
 		resCh:  make(chan string, 1),
 	}
 	go func() {
-		for range ir.reqCh {
-			line, _ := ir.reader.ReadString('\n')
-			ir.resCh <- line
+		// Run a single continuous reading goroutine to never lose input.
+		readDone := make(chan string)
+		go func() {
+			for {
+				line, err := ir.reader.ReadString('\n')
+				select {
+				case readDone <- line:
+				case <-ctx.Done():
+					return
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-ir.reqCh:
+				if !ok {
+					return
+				}
+
+				select {
+				case <-ctx.Done():
+					return
+				case line := <-readDone:
+					select {
+					case ir.resCh <- line:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
 		}
 	}()
 	return ir
@@ -94,7 +127,8 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 	// Request read
 	select {
 	case ir.reqCh <- struct{}{}:
-	default:
+	case <-ctx.Done():
+		return ""
 	}
 
 	select {
@@ -120,7 +154,8 @@ func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 	// Request read
 	select {
 	case ir.reqCh <- struct{}{}:
-	default:
+	case <-ctx.Done():
+		return
 	}
 
 	select {
@@ -260,7 +295,7 @@ func RunInteractiveMenu(
 	maxRetries int,
 	version string,
 ) error {
-	ir := newInteractiveReader(bufio.NewReader(os.Stdin))
+	ir := newInteractiveReader(ctx, bufio.NewReader(os.Stdin))
 	defer ir.Close()
 	allSpecs := config.All()
 

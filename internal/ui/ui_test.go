@@ -18,7 +18,9 @@ func (s slowReader) Read(p []byte) (n int, err error) {
 
 func TestUIGoroutineLeak(t *testing.T) {
 	reader := bufio.NewReader(slowReader{})
-	ir := newInteractiveReader(reader)
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+	ir := newInteractiveReader(rootCtx, reader)
 	defer ir.Close()
 
 	initialGoroutines := runtime.NumGoroutine()

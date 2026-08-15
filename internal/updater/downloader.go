@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,15 +59,11 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 	safeURL := guard.SanitizeString(rawURL)
 	safeID := guard.SanitizeString(appID)
 
-	tmpPath := filepath.Join(
-		os.TempDir(),
-		fmt.Sprintf("ag-up-%s-%d.tar.gz", safeID, time.Now().UnixNano()),
-	)
-
-	f, err := os.Create(tmpPath)
+	f, err := os.CreateTemp(os.TempDir(), fmt.Sprintf("ag-up-%s-*.tar.gz", safeID))
 	if err != nil {
 		return "", fmt.Errorf("downloader: create temp file for %q: %w", appID, err)
 	}
+	tmpPath := f.Name()
 
 	removeOnExit := true
 	defer func() {
