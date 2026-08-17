@@ -166,12 +166,12 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 		// Wrapping file extraction logic in a closure allows safe defer for os.Remove
 		err = func() error {
 			// Write to a uniquely-named temporary file first for atomic replacement.
-			// Incorporate os.Getpid() to prevent cross-process collisions.
-			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
-			outFile, err := os.Create(tmpPath)
+			// Use os.CreateTemp to get a secure temp file path and descriptor with 0600 mode
+			outFile, err := os.CreateTemp(filepath.Dir(destPath), ".tmp-*")
 			if err != nil {
-				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
+				return fmt.Errorf("updater: create temp file for %q: %w", destPath, err)
 			}
+			tmpPath := outFile.Name()
 			defer func() { _ = os.Remove(tmpPath) }()
 
 			// #nosec G110 — tarball size is capped by the download timeout.
@@ -186,7 +186,6 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			}
 
 			// Atomically replace the destination file
-			_ = os.Remove(destPath)
 			if err := os.Rename(tmpPath, destPath); err != nil {
 				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
@@ -240,9 +239,12 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 	}
 
 	// Extract to a uniquely-named temporary directory first for atomic replacement.
-	tmpDataDir := fmt.Sprintf("%s.tmp.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
-	if err := os.MkdirAll(tmpDataDir, 0750); err != nil {
-		return "", fmt.Errorf("updater: create temp install dir %q: %w", tmpDataDir, err)
+	if err := os.MkdirAll(filepath.Dir(dataDir), 0750); err != nil {
+		return "", fmt.Errorf("updater: create parent dir for data dir %q: %w", filepath.Dir(dataDir), err)
+	}
+	tmpDataDir, err := os.MkdirTemp(filepath.Dir(dataDir), ".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("updater: create temp install dir for %q: %w", dataDir, err)
 	}
 	defer func() { _ = os.RemoveAll(tmpDataDir) }()
 
@@ -324,11 +326,13 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				// Write to a uniquely-named temporary file first for atomic replacement.
 				// This prevents returning ELOOP if destPath points to a dangling symlink,
 				// and ensures a crash doesn't leave corrupted partial files.
-				tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
-				outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
+				// We create the file first with CreateTemp to ensure safe filename generation,
+				// and then Chmod it to apply the tar header's mode correctly, preserving execute bits.
+				outFile, err := os.CreateTemp(filepath.Dir(destPath), ".tmp-*")
 				if err != nil {
-					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
+					return fmt.Errorf("updater: create temp file for %q: %w", destPath, err)
 				}
+				tmpPath := outFile.Name()
 				defer func() { _ = os.Remove(tmpPath) }()
 
 				// #nosec G110 — tarball size is capped by the download timeout.
@@ -339,12 +343,12 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				_ = outFile.Close()
 
 				// Explicit chmod after write — safety net against umask stripping +x.
+				// This restores the exact permissions from the tarball, overriding CreateTemp's 0600.
 				if err := os.Chmod(tmpPath, fileMode); err != nil {
 					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 				}
 
 				// Atomically replace the destination file
-				_ = os.Remove(destPath)
 				if err := os.Rename(tmpPath, destPath); err != nil {
 					return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 				}
@@ -459,6 +463,7 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 	}
 
 	symlinkPath := filepath.Join(binDir, appID)
+	// generate a random unique tmp path
 	tmpSymlinkPath := fmt.Sprintf("%s.tmp.%d.%d", symlinkPath, os.Getpid(), time.Now().UnixNano())
 
 	// Create temporary symlink
