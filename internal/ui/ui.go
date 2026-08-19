@@ -6,7 +6,6 @@ package ui
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"os"
 	"strings"
 
@@ -57,26 +56,30 @@ func menu() {
 // interactiveReader manages a background goroutine for reading lines without leaking.
 type interactiveReader struct {
 	reader *bufio.Reader
-	reqCh  chan struct{}
-	resCh  chan string
+	reqCh  chan chan string
 }
 
 func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveReader {
 	ir := &interactiveReader{
 		reader: r,
-		reqCh:  make(chan struct{}, 1),
-		resCh:  make(chan string, 1),
+		reqCh:  make(chan chan string),
 	}
+
+	// Start a continuous reader loop in the background.
+	// It reads from the underlying reader and waits for a request.
+	// If a request comes in, it hands the line off and starts reading again.
+	// We MUST NOT leak goroutines, so it listens to ctx.Done().
 	go func() {
-		// Run a single continuous reading goroutine to never lose input.
+		// Dedicated goroutine for bufio.ReadString blocking call
 		readDone := make(chan string)
 		go func() {
 			for {
 				line, err := ir.reader.ReadString('\n')
+				// Wait for the dispatcher to be ready to accept, or cancellation
 				select {
-				case readDone <- line:
 				case <-ctx.Done():
 					return
+				case readDone <- line:
 				}
 				if err != nil {
 					return
@@ -88,20 +91,16 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 			select {
 			case <-ctx.Done():
 				return
-			case _, ok := <-ir.reqCh:
-				if !ok {
-					return
-				}
-
+			case replyCh := <-ir.reqCh:
+				// We have a request. Now wait for a line from the reader.
 				select {
 				case <-ctx.Done():
 					return
 				case line := <-readDone:
-					select {
-					case ir.resCh <- line:
-					case <-ctx.Done():
-						return
-					}
+					// Send the line back to the caller.
+					// We must not block here if the caller cancelled in the meantime.
+					// However, replyCh is buffered by 1, so this send is non-blocking.
+					replyCh <- line
 				}
 			}
 		}
@@ -111,30 +110,25 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 
 // Close gracefully terminates the background goroutine.
 func (ir *interactiveReader) Close() {
-	close(ir.reqCh)
+	// Let the context handle cancellation. No need to close reqCh to avoid panics on concurrent Close/readLine.
 }
 
 // readLine reads a single line from reader, aggressively trimming all leading
 // and trailing whitespace including \r\n (important for TTY and piped input).
 // Returns an empty string on EOF, read error, or context cancellation.
 func (ir *interactiveReader) readLine(ctx context.Context) string {
-	// Drain stale input from a previously cancelled request
-	select {
-	case <-ir.resCh:
-	default:
-	}
+	replyCh := make(chan string, 1)
 
-	// Request read
 	select {
-	case ir.reqCh <- struct{}{}:
 	case <-ctx.Done():
 		return ""
+	case ir.reqCh <- replyCh:
 	}
 
 	select {
 	case <-ctx.Done():
 		return ""
-	case line := <-ir.resCh:
+	case line := <-replyCh:
 		return strings.TrimSpace(line)
 	}
 }
@@ -145,22 +139,17 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 	printer.Print("\nPress [Enter] to return to the menu...")
 
-	// Drain stale input from a previously cancelled request
-	select {
-	case <-ir.resCh:
-	default:
-	}
+	replyCh := make(chan string, 1)
 
-	// Request read
 	select {
-	case ir.reqCh <- struct{}{}:
 	case <-ctx.Done():
 		return
+	case ir.reqCh <- replyCh:
 	}
 
 	select {
 	case <-ctx.Done():
-	case <-ir.resCh:
+	case <-replyCh:
 	}
 }
 
@@ -323,7 +312,7 @@ func RunInteractiveMenu(
 			printer.Println(colorCyan + "  Checking versions (this may take a moment)..." + colorReset)
 			results, err := checker.CheckAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
+				_, _ = printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
 				continue
 			}
 			PrintCheckResults(results)
@@ -335,7 +324,7 @@ func RunInteractiveMenu(
 			printer.Println(colorCyan + "  Updating all applications..." + colorReset)
 			results, err := updater.UpdateAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
+				_, _ = printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
 				continue
 			}
 			PrintUpdateResults(results)
