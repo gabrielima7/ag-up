@@ -30,6 +30,8 @@ func TestUpdateAllChaosRace(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/agy.tar.gz" {
+			// Delay slightly to ensure context cancellation occurs during the download phase
+			time.Sleep(50 * time.Millisecond)
 			w.Write([]byte("fake tarball data"))
 			return
 		}

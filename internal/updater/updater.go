@@ -186,7 +186,6 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			}
 
 			// Atomically replace the destination file
-			_ = os.Remove(destPath)
 			if err := os.Rename(tmpPath, destPath); err != nil {
 				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
@@ -344,7 +343,6 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				}
 
 				// Atomically replace the destination file
-				_ = os.Remove(destPath)
 				if err := os.Rename(tmpPath, destPath); err != nil {
 					return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 				}

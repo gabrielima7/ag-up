@@ -27,7 +27,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -61,17 +60,17 @@ func main() {
 	flagVersion := flag.Bool("version", false, "Print ag-up version and exit")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "\nUsage: ag-up [OPTIONS]\n\n")
-		fmt.Fprintf(os.Stderr, "Google Antigravity Universal Updater (ag-up) %s\n", Version)
-		fmt.Fprintf(os.Stderr, "Manages agy CLI, Antigravity IDE, and Antigravity Hub 2.0\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
+		printer.Fprintf(os.Stderr, "\nUsage: ag-up [OPTIONS]\n\n")
+		printer.Fprintf(os.Stderr, "Google Antigravity Universal Updater (ag-up) %s\n", Version)
+		printer.Fprintf(os.Stderr, "Manages agy CLI, Antigravity IDE, and Antigravity Hub 2.0\n\n")
+		printer.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  ag-up                    # Launch interactive menu\n")
-		fmt.Fprintf(os.Stderr, "  ag-up --check            # Check versions (no download)\n")
-		fmt.Fprintf(os.Stderr, "  ag-up --all              # Update everything concurrently\n")
-		fmt.Fprintf(os.Stderr, "  ag-up --cli              # Update only the CLI\n")
-		fmt.Fprintf(os.Stderr, "  ag-up --ide --retries 5  # Update IDE with 5 retries\n\n")
+		printer.Fprintf(os.Stderr, "\nExamples:\n")
+		printer.Fprintf(os.Stderr, "  ag-up                    # Launch interactive menu\n")
+		printer.Fprintf(os.Stderr, "  ag-up --check            # Check versions (no download)\n")
+		printer.Fprintf(os.Stderr, "  ag-up --all              # Update everything concurrently\n")
+		printer.Fprintf(os.Stderr, "  ag-up --cli              # Update only the CLI\n")
+		printer.Fprintf(os.Stderr, "  ag-up --ide --retries 5  # Update IDE with 5 retries\n\n")
 	}
 
 	flag.Parse()
@@ -114,7 +113,7 @@ func main() {
 	}
 
 	if err := xdg.EnsureDirectories(allAppIDs); err != nil {
-		fmt.Fprintf(os.Stderr, "ag-up: failed to create XDG directories: %v\n", err)
+		printer.Fprintf(os.Stderr, "ag-up: failed to create XDG directories: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -123,7 +122,7 @@ func main() {
 	// -----------------------------------------------------------------------
 	m, err := manifest.Load()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ag-up: failed to load manifest: %v\n", err)
+		printer.Fprintf(os.Stderr, "ag-up: failed to load manifest: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -157,7 +156,7 @@ func main() {
 		if ctx.Err() != nil {
 			handleCancellation()
 		}
-		fmt.Fprintf(os.Stderr, "ag-up: %v\n", err)
+		printer.Fprintf(os.Stderr, "ag-up: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -172,7 +171,7 @@ func main() {
 // message, and exits with code 130 (the POSIX convention for Ctrl-C / SIGINT).
 func handleCancellation() {
 	slog.Warn("ag-up: operation canceled by user, cleaning up temporary files...")
-	fmt.Fprintln(os.Stderr, "\n[!] Process interrupted. All temporary files cleaned up.")
+	printer.Fprintln(os.Stderr, "\n[!] Process interrupted. All temporary files cleaned up.")
 	os.Exit(130)
 }
 
@@ -200,7 +199,7 @@ func runFlagMode(
 		printer.Println("\n  Checking versions…")
 		results, err := checker.CheckAll(ctx, specs, m, maxRetries)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ag-up: check failed: %v\n", err)
+			printer.Fprintf(os.Stderr, "ag-up: check failed: %v\n", err)
 			return 1
 		}
 		ui.PrintCheckResults(results)
@@ -235,7 +234,7 @@ func runFlagMode(
 		var err error
 		updateResults, err = updater.UpdateAll(ctx, specs, m, maxRetries)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ag-up: update failed: %v\n", err)
+			printer.Fprintf(os.Stderr, "ag-up: update failed: %v\n", err)
 			return 1
 		}
 	}

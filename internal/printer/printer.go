@@ -28,3 +28,17 @@ func Print(a ...any) {
 	defer Mu.Unlock()
 	fmt.Print(a...)
 }
+
+// Fprintf is a synchronized wrapper around fmt.Fprintf.
+func Fprintf(w interface{ Write([]byte) (int, error) }, format string, a ...any) (int, error) {
+	Mu.Lock()
+	defer Mu.Unlock()
+	return fmt.Fprintf(w, format, a...)
+}
+
+// Fprintln is a synchronized wrapper around fmt.Fprintln.
+func Fprintln(w interface{ Write([]byte) (int, error) }, a ...any) (int, error) {
+	Mu.Lock()
+	defer Mu.Unlock()
+	return fmt.Fprintln(w, a...)
+}
