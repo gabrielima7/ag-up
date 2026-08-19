@@ -312,7 +312,7 @@ func RunInteractiveMenu(
 			printer.Println(colorCyan + "  Checking versions (this may take a moment)..." + colorReset)
 			results, err := checker.CheckAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
-				printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
+				_, _ = printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
 				continue
 			}
 			PrintCheckResults(results)
@@ -324,7 +324,7 @@ func RunInteractiveMenu(
 			printer.Println(colorCyan + "  Updating all applications..." + colorReset)
 			results, err := updater.UpdateAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
-				printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
+				_, _ = printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
 				continue
 			}
 			PrintUpdateResults(results)
