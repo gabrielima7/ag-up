@@ -168,7 +168,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			// Write to a uniquely-named temporary file first for atomic replacement.
 			// Incorporate os.Getpid() to prevent cross-process collisions.
 			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
-			outFile, err := os.Create(tmpPath)
+			outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
 			if err != nil {
 				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 			}
@@ -324,7 +324,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				// This prevents returning ELOOP if destPath points to a dangling symlink,
 				// and ensures a crash doesn't leave corrupted partial files.
 				tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
-				outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
+				outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_RDWR|os.O_TRUNC, fileMode)
 				if err != nil {
 					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 				}
@@ -415,12 +415,12 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 
 	// Atomically replace dataDir with tmpDataDir
 	backupDir := fmt.Sprintf("%s.backup.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
+
 	hasOld := true
-	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-		hasOld = false
-	}
-	if hasOld {
-		if err := os.Rename(dataDir, backupDir); err != nil {
+	if err := os.Rename(dataDir, backupDir); err != nil {
+		if os.IsNotExist(err) {
+			hasOld = false
+		} else {
 			return "", fmt.Errorf("updater: backup old data dir: %w", err)
 		}
 	}
