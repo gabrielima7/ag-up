@@ -415,10 +415,14 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 
 	// Atomically replace dataDir with tmpDataDir
 	backupDir := fmt.Sprintf("%s.backup.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
-	renameErr := os.Rename(dataDir, backupDir)
-	hasOld := !os.IsNotExist(renameErr)
-	if renameErr != nil && hasOld {
-		return "", fmt.Errorf("updater: backup old data dir: %w", renameErr)
+	hasOld := true
+	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+		hasOld = false
+	}
+	if hasOld {
+		if err := os.Rename(dataDir, backupDir); err != nil {
+			return "", fmt.Errorf("updater: backup old data dir: %w", err)
+		}
 	}
 
 	if err := os.Rename(tmpDataDir, dataDir); err != nil {
