@@ -168,11 +168,16 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			// Write to a uniquely-named temporary file first for atomic replacement.
 			// Incorporate os.Getpid() to prevent cross-process collisions.
 			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
-			outFile, err := os.Create(tmpPath)
+			outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0755)
 			if err != nil {
 				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 			}
 			defer func() { _ = os.Remove(tmpPath) }()
+
+			if err := outFile.Chmod(0755); err != nil {
+				_ = outFile.Close()
+				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
+			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
 			if _, err := io.Copy(outFile, tr); err != nil {
@@ -180,10 +185,6 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
 			_ = outFile.Close()
-
-			if err := os.Chmod(tmpPath, 0755); err != nil {
-				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
-			}
 
 			// Atomically replace the destination file
 			if err := os.Rename(tmpPath, destPath); err != nil {
@@ -324,11 +325,16 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				// This prevents returning ELOOP if destPath points to a dangling symlink,
 				// and ensures a crash doesn't leave corrupted partial files.
 				tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
-				outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, fileMode)
+				outFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
 				if err != nil {
 					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 				}
 				defer func() { _ = os.Remove(tmpPath) }()
+
+				if err := outFile.Chmod(fileMode); err != nil {
+					_ = outFile.Close()
+					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
+				}
 
 				// #nosec G110 — tarball size is capped by the download timeout.
 				if _, err := io.Copy(outFile, tr); err != nil {
@@ -336,11 +342,6 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
 				_ = outFile.Close()
-
-				// Explicit chmod after write — safety net against umask stripping +x.
-				if err := os.Chmod(tmpPath, fileMode); err != nil {
-					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
-				}
 
 				// Atomically replace the destination file
 				if err := os.Rename(tmpPath, destPath); err != nil {
@@ -416,11 +417,10 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 	// Atomically replace dataDir with tmpDataDir
 	backupDir := fmt.Sprintf("%s.backup.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
 	hasOld := true
-	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-		hasOld = false
-	}
-	if hasOld {
-		if err := os.Rename(dataDir, backupDir); err != nil {
+	if err := os.Rename(dataDir, backupDir); err != nil {
+		if os.IsNotExist(err) {
+			hasOld = false
+		} else {
 			return "", fmt.Errorf("updater: backup old data dir: %w", err)
 		}
 	}

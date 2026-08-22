@@ -83,18 +83,19 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 	tmpPath := f.Name()
 	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
+	// Ensure the file is readable by the desktop environment (0644).
+	// #nosec G302
+	if err := f.Chmod(0644); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("desktop: chmod %q: %w", tmpPath, err)
+	}
+
 	if err := tmpl.Execute(f, data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("desktop: render %q: %w", tmpPath, err)
 	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("desktop: close temp file %q: %w", tmpPath, err)
-	}
-
-	// Ensure the file is readable by the desktop environment (0644).
-	// #nosec G302
-	if err := os.Chmod(tmpPath, 0644); err != nil {
-		return fmt.Errorf("desktop: chmod %q: %w", tmpPath, err)
 	}
 
 	// Atomically replace the destination file
@@ -263,6 +264,11 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
+	// Preserve original permissions.
+	if info, err := os.Stat(path); err == nil {
+		_ = tmp.Chmod(info.Mode())
+	}
+
 	if _, err := tmp.WriteString(newContent); err != nil {
 		_ = tmp.Close()
 		slog.Warn("desktop: sync legacy: write failed", "path", tmpPath, "error", err)
@@ -271,11 +277,6 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 	if err := tmp.Close(); err != nil {
 		slog.Warn("desktop: sync legacy: close failed", "path", tmpPath, "error", err)
 		return false
-	}
-
-	// Preserve original permissions.
-	if info, err := os.Stat(path); err == nil {
-		_ = os.Chmod(tmpPath, info.Mode())
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
