@@ -111,15 +111,17 @@ func saveLocked(m *Manifest) error {
 	tmpPath := tmpFile.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 
+	if err := tmpFile.Chmod(0644); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("manifest: chmod temp file %q: %w", tmpPath, err)
+	}
+
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("manifest: close temp file %q: %w", tmpPath, err)
-	}
-	if err := os.Chmod(tmpPath, 0644); err != nil {
-		return fmt.Errorf("manifest: chmod temp file %q: %w", tmpPath, err)
 	}
 
 	if err := os.Rename(tmpPath, path); err != nil {
