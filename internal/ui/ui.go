@@ -73,6 +73,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 		// Dedicated goroutine for bufio.ReadString blocking call
 		readDone := make(chan string)
 		go func() {
+			defer close(readDone)
 			for {
 				line, err := ir.reader.ReadString('\n')
 				// Wait for the dispatcher to be ready to accept, or cancellation
@@ -87,20 +88,36 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 			}
 		}()
 
+		eof := false
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case replyCh := <-ir.reqCh:
+				if eof {
+					select {
+					case replyCh <- "":
+					default:
+					}
+					continue
+				}
 				// We have a request. Now wait for a line from the reader.
 				select {
 				case <-ctx.Done():
 					return
-				case line := <-readDone:
-					// Send the line back to the caller.
-					// We must not block here if the caller cancelled in the meantime.
-					// However, replyCh is buffered by 1, so this send is non-blocking.
-					replyCh <- line
+				case line, ok := <-readDone:
+					if !ok {
+						eof = true
+						select {
+						case replyCh <- "":
+						default:
+						}
+					} else {
+						select {
+						case replyCh <- line:
+						default:
+						}
+					}
 				}
 			}
 		}

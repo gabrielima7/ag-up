@@ -6,6 +6,9 @@ ag-up
 *.so
 *.dylib
 
-# Temporary files
+# Temporary and backup files
 *.tmp
 *.log
+*.orig
+*.bak
+coverage.out
