@@ -95,10 +95,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 				return
 			case replyCh := <-ir.reqCh:
 				if eof {
-					select {
-					case replyCh <- "":
-					default:
-					}
+					close(replyCh)
 					continue
 				}
 				// We have a request. Now wait for a line from the reader.
@@ -108,10 +105,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 				case line, ok := <-readDone:
 					if !ok {
 						eof = true
-						select {
-						case replyCh <- "":
-						default:
-						}
+						close(replyCh)
 					} else {
 						select {
 						case replyCh <- line:
@@ -145,7 +139,10 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 	select {
 	case <-ctx.Done():
 		return ""
-	case line := <-replyCh:
+	case line, ok := <-replyCh:
+		if !ok {
+			return ""
+		}
 		return strings.TrimSpace(line)
 	}
 }
