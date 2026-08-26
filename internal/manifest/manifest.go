@@ -84,12 +84,18 @@ func Load() (*Manifest, error) {
 // Save serialises the manifest to disk, atomically replacing the previous
 // version via a write-and-rename strategy to prevent partial writes.
 func Save(m *Manifest) error {
+	if m == nil {
+		return fmt.Errorf("manifest: Save called on nil manifest")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return saveLocked(m)
 }
 
 func saveLocked(m *Manifest) error {
+	if m == nil {
+		return fmt.Errorf("manifest: saveLocked called on nil manifest")
+	}
 	path, err := xdg.ManifestPath()
 	if err != nil {
 		return fmt.Errorf("manifest: resolve path: %w", err)
@@ -134,6 +140,9 @@ func saveLocked(m *Manifest) error {
 // Get returns the AppEntry for the given appID, plus a boolean indicating
 // whether a record exists (analogous to a Go map lookup).
 func Get(m *Manifest, appID string) (AppEntry, bool) {
+	if m == nil {
+		return AppEntry{}, false
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.Apps[appID]
@@ -143,6 +152,9 @@ func Get(m *Manifest, appID string) (AppEntry, bool) {
 // Set updates the in-memory AppEntry for appID and persists the manifest to
 // disk immediately. Returns an error if the save fails.
 func Set(m *Manifest, appID string, entry AppEntry) error {
+	if m == nil {
+		return fmt.Errorf("manifest: Set called on nil manifest")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Apps[appID] = entry
@@ -152,6 +164,9 @@ func Set(m *Manifest, appID string, entry AppEntry) error {
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
 // modifying the InstalledVersion, then saves the manifest.
 func MarkChecked(m *Manifest, appID, etag string) error {
+	if m == nil {
+		return fmt.Errorf("manifest: MarkChecked called on nil manifest")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.Apps[appID]
@@ -166,6 +181,9 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 // MarkInstalled records a successful installation of version for appID,
 // updating both InstalledVersion and LastUpdated.
 func MarkInstalled(m *Manifest, appID, version, etag string) error {
+	if m == nil {
+		return fmt.Errorf("manifest: MarkInstalled called on nil manifest")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.Apps[appID]
