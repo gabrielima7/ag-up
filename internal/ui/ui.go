@@ -99,6 +99,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 					case replyCh <- "":
 					default:
 					}
+					close(replyCh)
 					continue
 				}
 				// We have a request. Now wait for a line from the reader.
@@ -118,6 +119,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 						default:
 						}
 					}
+					close(replyCh)
 				}
 			}
 		}

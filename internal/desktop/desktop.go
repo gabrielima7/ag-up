@@ -162,16 +162,12 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 		filepath.Join(home, "Escritorio"),   // Spanish
 		filepath.Join(home, "Schreibtisch"), // German
 	} {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			scanDirs = append(scanDirs, candidate)
-		}
+		scanDirs = append(scanDirs, candidate)
 	}
 
 	// Also check XDG_DESKTOP_DIR if set.
 	if xdgDesktop := os.Getenv("XDG_DESKTOP_DIR"); xdgDesktop != "" {
-		if info, err := os.Stat(filepath.Clean(xdgDesktop)); err == nil && info.IsDir() {
-			scanDirs = append(scanDirs, xdgDesktop)
-		}
+		scanDirs = append(scanDirs, filepath.Clean(xdgDesktop))
 	}
 
 	for _, dir := range scanDirs {
@@ -264,9 +260,16 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
-	// Preserve original permissions.
+	// Preserve original permissions, fallback to 0644 on stat error
+	fileMode := os.FileMode(0644)
 	if info, err := os.Stat(path); err == nil {
-		_ = tmp.Chmod(info.Mode())
+		fileMode = info.Mode()
+	}
+
+	if err := tmp.Chmod(fileMode); err != nil {
+		_ = tmp.Close()
+		slog.Warn("desktop: sync legacy: chmod failed", "path", tmpPath, "error", err)
+		return false
 	}
 
 	if _, err := tmp.WriteString(newContent); err != nil {
