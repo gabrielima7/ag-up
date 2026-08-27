@@ -162,12 +162,16 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 		filepath.Join(home, "Escritorio"),   // Spanish
 		filepath.Join(home, "Schreibtisch"), // German
 	} {
-		scanDirs = append(scanDirs, candidate)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			scanDirs = append(scanDirs, candidate)
+		}
 	}
 
 	// Also check XDG_DESKTOP_DIR if set.
 	if xdgDesktop := os.Getenv("XDG_DESKTOP_DIR"); xdgDesktop != "" {
-		scanDirs = append(scanDirs, filepath.Clean(xdgDesktop))
+		if info, err := os.Stat(filepath.Clean(xdgDesktop)); err == nil && info.IsDir() { // #nosec G304 G703
+			scanDirs = append(scanDirs, xdgDesktop)
+		}
 	}
 
 	for _, dir := range scanDirs {
@@ -196,7 +200,7 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 // Returns true if the file was modified.
 func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath string) bool {
 	path = filepath.Clean(path)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 G703
 	if err != nil {
 		return false
 	}
@@ -258,14 +262,13 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 		return false
 	}
 	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
+	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }() // #nosec G304 G703
 
 	// Preserve original permissions, fallback to 0644 on stat error
 	fileMode := os.FileMode(0644)
-	if info, err := os.Stat(path); err == nil {
+	if info, err := os.Stat(path); err == nil { // #nosec G304 G703
 		fileMode = info.Mode()
 	}
-
 	if err := tmp.Chmod(fileMode); err != nil {
 		_ = tmp.Close()
 		slog.Warn("desktop: sync legacy: chmod failed", "path", tmpPath, "error", err)
@@ -282,7 +285,7 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 		return false
 	}
 
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil { // #nosec G304 G703
 		slog.Warn("desktop: sync legacy: rename failed", "path", path, "error", err)
 		return false
 	}
