@@ -134,6 +134,9 @@ func saveLocked(m *Manifest) error {
 // Get returns the AppEntry for the given appID, plus a boolean indicating
 // whether a record exists (analogous to a Go map lookup).
 func Get(m *Manifest, appID string) (AppEntry, bool) {
+	if m == nil {
+		return AppEntry{}, false
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.Apps[appID]
@@ -143,6 +146,9 @@ func Get(m *Manifest, appID string) (AppEntry, bool) {
 // Set updates the in-memory AppEntry for appID and persists the manifest to
 // disk immediately. Returns an error if the save fails.
 func Set(m *Manifest, appID string, entry AppEntry) error {
+	if m == nil {
+		return fmt.Errorf("manifest is nil")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.Apps[appID] = entry
@@ -152,6 +158,9 @@ func Set(m *Manifest, appID string, entry AppEntry) error {
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
 // modifying the InstalledVersion, then saves the manifest.
 func MarkChecked(m *Manifest, appID, etag string) error {
+	if m == nil {
+		return fmt.Errorf("manifest is nil")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.Apps[appID]
@@ -166,6 +175,9 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 // MarkInstalled records a successful installation of version for appID,
 // updating both InstalledVersion and LastUpdated.
 func MarkInstalled(m *Manifest, appID, version, etag string) error {
+	if m == nil {
+		return fmt.Errorf("manifest is nil")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry := m.Apps[appID]

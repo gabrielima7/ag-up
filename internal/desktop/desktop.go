@@ -162,16 +162,12 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 		filepath.Join(home, "Escritorio"),   // Spanish
 		filepath.Join(home, "Schreibtisch"), // German
 	} {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			scanDirs = append(scanDirs, candidate)
-		}
+		scanDirs = append(scanDirs, candidate)
 	}
 
 	// Also check XDG_DESKTOP_DIR if set.
 	if xdgDesktop := os.Getenv("XDG_DESKTOP_DIR"); xdgDesktop != "" {
-		if info, err := os.Stat(filepath.Clean(xdgDesktop)); err == nil && info.IsDir() {
-			scanDirs = append(scanDirs, xdgDesktop)
-		}
+		scanDirs = append(scanDirs, xdgDesktop)
 	}
 
 	for _, dir := range scanDirs {
@@ -267,6 +263,8 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 	// Preserve original permissions.
 	if info, err := os.Stat(path); err == nil {
 		_ = tmp.Chmod(info.Mode())
+	} else {
+		_ = tmp.Chmod(0644)
 	}
 
 	if _, err := tmp.WriteString(newContent); err != nil {
