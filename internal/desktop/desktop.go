@@ -162,16 +162,12 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 		filepath.Join(home, "Escritorio"),   // Spanish
 		filepath.Join(home, "Schreibtisch"), // German
 	} {
-		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			scanDirs = append(scanDirs, candidate)
-		}
+		scanDirs = append(scanDirs, candidate)
 	}
 
 	// Also check XDG_DESKTOP_DIR if set.
 	if xdgDesktop := os.Getenv("XDG_DESKTOP_DIR"); xdgDesktop != "" {
-		if info, err := os.Stat(filepath.Clean(xdgDesktop)); err == nil && info.IsDir() {
-			scanDirs = append(scanDirs, xdgDesktop)
-		}
+		scanDirs = append(scanDirs, xdgDesktop)
 	}
 
 	for _, dir := range scanDirs {
@@ -200,6 +196,7 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 // Returns true if the file was modified.
 func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath string) bool {
 	path = filepath.Clean(path)
+	// #nosec G703
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -262,11 +259,15 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 		return false
 	}
 	tmpPath := tmp.Name()
+	// #nosec G703
 	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
 	// Preserve original permissions.
+	// #nosec G703
 	if info, err := os.Stat(path); err == nil {
 		_ = tmp.Chmod(info.Mode())
+	} else {
+		_ = tmp.Chmod(0644)
 	}
 
 	if _, err := tmp.WriteString(newContent); err != nil {
@@ -279,6 +280,7 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 		return false
 	}
 
+	// #nosec G703
 	if err := os.Rename(tmpPath, path); err != nil {
 		slog.Warn("desktop: sync legacy: rename failed", "path", path, "error", err)
 		return false

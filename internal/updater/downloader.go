@@ -63,6 +63,11 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 	if err != nil {
 		return "", fmt.Errorf("downloader: create temp file for %q: %w", appID, err)
 	}
+	if err := f.Chmod(0600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", fmt.Errorf("downloader: chmod temp file for %q: %w", appID, err)
+	}
 	tmpPath := f.Name()
 
 	removeOnExit := true
