@@ -148,7 +148,10 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 	select {
 	case <-ctx.Done():
 		return ""
-	case line := <-replyCh:
+	case line, ok := <-replyCh:
+		if !ok {
+			return ""
+		}
 		return strings.TrimSpace(line)
 	}
 }

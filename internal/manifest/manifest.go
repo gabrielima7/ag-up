@@ -84,12 +84,18 @@ func Load() (*Manifest, error) {
 // Save serialises the manifest to disk, atomically replacing the previous
 // version via a write-and-rename strategy to prevent partial writes.
 func Save(m *Manifest) error {
+	if m == nil {
+		return fmt.Errorf("manifest is nil")
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return saveLocked(m)
 }
 
 func saveLocked(m *Manifest) error {
+	if m == nil {
+		return fmt.Errorf("manifest is nil")
+	}
 	path, err := xdg.ManifestPath()
 	if err != nil {
 		return fmt.Errorf("manifest: resolve path: %w", err)
