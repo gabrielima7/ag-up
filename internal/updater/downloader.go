@@ -108,6 +108,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
+				_, _ = io.Copy(io.Discard, resp.Body)
 				return fmt.Errorf(
 					"downloader: HTTP %d for %q (url: %s)",
 					resp.StatusCode, appID, safeURL,

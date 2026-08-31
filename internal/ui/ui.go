@@ -336,6 +336,7 @@ func RunInteractiveMenu(
 			results, err := checker.CheckAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
 				_, _ = printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
+				ir.pressEnterToContinue(ctx)
 				continue
 			}
 			PrintCheckResults(results)
@@ -348,6 +349,7 @@ func RunInteractiveMenu(
 			results, err := updater.UpdateAll(ctx, allSpecs, m, maxRetries)
 			if err != nil {
 				_, _ = printer.Fprintf(os.Stderr, "%s  Error: %v%s\n", colorRed, err, colorReset)
+				ir.pressEnterToContinue(ctx)
 				continue
 			}
 			PrintUpdateResults(results)
