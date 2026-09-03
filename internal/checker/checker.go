@@ -103,6 +103,7 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return fmt.Errorf("checker: GET %q returned status %d", url, resp.StatusCode)
 	}
 
@@ -135,6 +136,7 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return "", fmt.Errorf("checker: GET %q returned status %d", pageURL, resp.StatusCode)
 	}
 
