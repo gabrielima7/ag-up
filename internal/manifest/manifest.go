@@ -157,6 +157,9 @@ func Set(m *Manifest, appID string, entry AppEntry) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Apps == nil {
+		m.Apps = make(map[string]AppEntry)
+	}
 	m.Apps[appID] = entry
 	return saveLocked(m)
 }
@@ -169,6 +172,9 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Apps == nil {
+		m.Apps = make(map[string]AppEntry)
+	}
 	entry := m.Apps[appID]
 	entry.LastChecked = time.Now()
 	if etag != "" {
@@ -186,6 +192,9 @@ func MarkInstalled(m *Manifest, appID, version, etag string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Apps == nil {
+		m.Apps = make(map[string]AppEntry)
+	}
 	entry := m.Apps[appID]
 	entry.InstalledVersion = version
 	entry.ETag = etag
