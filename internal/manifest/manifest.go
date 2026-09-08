@@ -108,15 +108,16 @@ func saveLocked(m *Manifest) error {
 	}
 
 	// Write to a uniquely-named temporary file first, then rename — atomic on Linux.
-	// Use UnixNano to prevent predictable filename collisions if multiple ag-up processes run concurrently.
+	// os.CreateTemp prevents predictable filename collisions if multiple ag-up processes run concurrently.
 	dir, file := filepath.Split(path)
-	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", filepath.Join(dir, file), os.Getpid(), time.Now().UnixNano())
-	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	tmpFile, err := os.CreateTemp(dir, file+".tmp.*")
 	if err != nil {
 		return fmt.Errorf("manifest: create temp file in %q: %w", dir, err)
 	}
+	tmpPath := tmpFile.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 
+	// #nosec G302
 	if err := tmpFile.Chmod(0644); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("manifest: chmod temp file %q: %w", tmpPath, err)
