@@ -8,10 +8,12 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/gabrielima7/GopherCore/guard"
 	"github.com/gabrielima7/ag-up/internal/config"
@@ -76,11 +78,11 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 	destPath := filepath.Join(appsDir, guard.SanitizeString(spec.ID)+".desktop")
 
 	dir, file := filepath.Split(destPath)
-	f, err := os.CreateTemp(dir, file+".tmp.*")
+	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", filepath.Join(dir, file), os.Getpid(), time.Now().UnixNano())
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("desktop: create temp file in %q: %w", dir, err)
 	}
-	tmpPath := f.Name()
 	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
 	// Ensure the file is readable by the desktop environment (0644).
@@ -196,8 +198,18 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 // Returns true if the file was modified.
 func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath string) bool {
 	path = filepath.Clean(path)
-	// #nosec G703
-	data, err := os.ReadFile(path)
+
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return false
+	}
+	data, err := io.ReadAll(f)
+	_ = f.Close()
 	if err != nil {
 		return false
 	}
@@ -253,21 +265,20 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 
 	// Atomic write.
 	dir, base := filepath.Split(path)
-	tmp, err := os.CreateTemp(dir, base+".tmp.*")
+	tmpPath := fmt.Sprintf("%s.tmp.%d.%d", filepath.Join(dir, base), os.Getpid(), time.Now().UnixNano())
+	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode())
 	if err != nil {
 		slog.Warn("desktop: sync legacy: cannot create temp file", "path", path, "error", err)
 		return false
 	}
-	tmpPath := tmp.Name()
 	// #nosec G703
 	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
 
 	// Preserve original permissions.
-	// #nosec G703
-	if info, err := os.Stat(path); err == nil {
-		_ = tmp.Chmod(info.Mode())
-	} else {
-		_ = tmp.Chmod(0644)
+	if err := tmp.Chmod(info.Mode()); err != nil {
+		_ = tmp.Close()
+		slog.Warn("desktop: sync legacy: chmod failed", "path", tmpPath, "error", err)
+		return false
 	}
 
 	if _, err := tmp.WriteString(newContent); err != nil {
