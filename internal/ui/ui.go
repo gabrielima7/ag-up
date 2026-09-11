@@ -57,12 +57,15 @@ func menu() {
 type interactiveReader struct {
 	reader *bufio.Reader
 	reqCh  chan chan string
+	cancel context.CancelFunc
 }
 
 func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveReader {
+	ctx, cancel := context.WithCancel(ctx)
 	ir := &interactiveReader{
 		reader: r,
 		reqCh:  make(chan chan string),
+		cancel: cancel,
 	}
 
 	// Start a continuous reader loop in the background.
@@ -130,7 +133,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 
 // Close gracefully terminates the background goroutine.
 func (ir *interactiveReader) Close() {
-	// Let the context handle cancellation. No need to close reqCh to avoid panics on concurrent Close/readLine.
+	ir.cancel()
 }
 
 // readLine reads a single line from reader, aggressively trimming all leading

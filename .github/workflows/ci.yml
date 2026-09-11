@@ -19,6 +19,13 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Check Repository Hygiene & Unauthorized Scripts
+        run: |
+          if git ls-files | grep -E '^patch_.*\.py$'; then
+            echo "Security & Hygiene Failure: Unauthorized patch scripts detected in root directory."
+            exit 1
+          fi
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

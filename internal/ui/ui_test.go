@@ -76,3 +76,21 @@ func TestUIPostEOF(t *testing.T) {
 		}
 	}
 }
+
+func TestUICloseCancellation(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader("some content\n"))
+	rootCtx := context.Background() // explicitly uncancelled root context
+
+	ir := newInteractiveReader(rootCtx, reader)
+	// Calling Close cancels the internal context
+	ir.Close()
+
+	// Subsequent readLine on another context should immediately exit/return ""
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	line := ir.readLine(ctx)
+	if line != "" {
+		t.Fatalf("expected empty string after ir.Close(), got %q", line)
+	}
+}
+
