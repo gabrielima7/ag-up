@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gabrielima7/GopherCore/async"
@@ -34,6 +35,12 @@ import (
 
 // Version is the current ag-up release version.
 const Version = "v0.1.0"
+
+// copyBufPool is a shared sync.Pool for 32KB buffers to eliminate heap
+// allocations during high-throughput file streaming (io.Copy).
+var copyBufPool = sync.Pool{
+	New: func() any { b := make([]byte, 32*1024); return &b },
+}
 
 func safePrint(format string, a ...any) {
 	printer.Printf(format, a...)
@@ -84,7 +91,10 @@ func verifySHA512(path, expected string) error {
 	defer func() { _ = f.Close() }()
 
 	h := sha512.New()
-	if _, err := io.Copy(h, f); err != nil {
+	bufPtr := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bufPtr)
+
+	if _, err := io.CopyBuffer(h, f, *bufPtr); err != nil {
 		return fmt.Errorf("sha512: hash %q: %w", path, err)
 	}
 
@@ -128,6 +138,11 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 	if innerName == "" {
 		innerName = spec.BinaryName
 	}
+
+	// Allocate one buffer for all file extractions in this tarball to avoid
+	// defer overhead in the loop.
+	bufPtr := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bufPtr)
 
 	found := false
 	for {
@@ -180,7 +195,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
-			if _, err := io.Copy(outFile, tr); err != nil {
+			if _, err := io.CopyBuffer(outFile, tr, *bufPtr); err != nil {
 				_ = outFile.Close()
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
@@ -269,6 +284,11 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 	// fallback (phase 2) when no "antigravity" binary is found.
 	var candidateBinaries []string
 
+	// Allocate one buffer for all file extractions in this tarball to avoid
+	// defer overhead in the loop.
+	bufPtr := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bufPtr)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -338,7 +358,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				}
 
 				// #nosec G110 — tarball size is capped by the download timeout.
-				if _, err := io.Copy(outFile, tr); err != nil {
+				if _, err := io.CopyBuffer(outFile, tr, *bufPtr); err != nil {
 					_ = outFile.Close()
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
@@ -581,6 +601,12 @@ func Update(
 	)
 
 	// --- Step 2: Download tarball ---
+	if cr.ResolvedURL == "" {
+		summary.Error = fmt.Errorf("updater: resolved download URL is empty for %s", spec.ID)
+		slog.Error("updater: download failed due to empty url", "app_id", spec.ID)
+		return result.Err[AppUpdateSummary](summary.Error)
+	}
+
 	safePrint("  [%s] Downloading %s...\n", spec.ID, cr.RemoteVersion)
 	tarGzPath, err := DownloadTarGz(ctx, cr.ResolvedURL, spec.ID, maxRetries)
 	if err != nil {

@@ -107,12 +107,7 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 		return fmt.Errorf("checker: GET %q returned status %d", url, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1*1024*1024))
-	if err != nil {
-		return fmt.Errorf("checker: read body from %q: %w", url, err)
-	}
-
-	if err := json.Unmarshal(body, dest); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1*1024*1024)).Decode(dest); err != nil {
 		return fmt.Errorf("checker: decode JSON from %q: %w", url, err)
 	}
 	return nil
