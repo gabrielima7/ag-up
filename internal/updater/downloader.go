@@ -115,7 +115,10 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 				)
 			}
 
-			written, err := io.Copy(f, resp.Body)
+			bufPtr := copyBufPool.Get().(*[]byte)
+			defer copyBufPool.Put(bufPtr)
+
+			written, err := io.CopyBuffer(f, resp.Body, *bufPtr)
 			if err != nil {
 				if ctx.Err() != nil {
 					return fmt.Errorf("downloader: body copy cancelled for %q: %w", appID, ctx.Err())
