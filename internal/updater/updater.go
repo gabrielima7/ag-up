@@ -419,9 +419,11 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 			var absTarget string
 			if hdr.Typeflag == tar.TypeLink {
 				// Hardlinks are resolved relative to the archive root (tmpDataDir).
+				// #nosec G305 -- Target is verified safe immediately below using filepath.Rel.
 				absTarget = filepath.Join(tmpDataDir, linkTarget)
 			} else {
 				// Symlinks are resolved relative to the symlink's containing directory.
+				// #nosec G305 -- Target is verified safe immediately below using filepath.Rel.
 				absTarget = filepath.Join(filepath.Dir(destPath), linkTarget)
 			}
 
