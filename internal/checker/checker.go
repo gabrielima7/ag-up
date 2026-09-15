@@ -104,7 +104,7 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return fmt.Errorf("checker: GET %q returned status %d", url, resp.StatusCode)
+		return fmt.Errorf("checker: GET %q HTTP %d", url, resp.StatusCode)
 	}
 
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1*1024*1024)).Decode(dest); err != nil {
@@ -132,7 +132,7 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return "", fmt.Errorf("checker: GET %q returned status %d", pageURL, resp.StatusCode)
+		return "", fmt.Errorf("checker: GET %q HTTP %d", pageURL, resp.StatusCode)
 	}
 
 	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))

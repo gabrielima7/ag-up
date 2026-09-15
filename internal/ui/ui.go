@@ -53,10 +53,16 @@ func menu() {
 	printer.Print(colorBold + "  → " + colorReset)
 }
 
+// readRequest combines a reply channel and a cancellation context.
+type readRequest struct {
+	replyCh chan string
+	ctx     context.Context
+}
+
 // interactiveReader manages a background goroutine for reading lines without leaking.
 type interactiveReader struct {
 	reader *bufio.Reader
-	reqCh  chan chan string
+	reqCh  chan readRequest
 	cancel context.CancelFunc
 }
 
@@ -64,7 +70,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 	ctx, cancel := context.WithCancel(ctx)
 	ir := &interactiveReader{
 		reader: r,
-		reqCh:  make(chan chan string),
+		reqCh:  make(chan readRequest),
 		cancel: cancel,
 	}
 
@@ -96,34 +102,37 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 			select {
 			case <-ctx.Done():
 				return
-			case replyCh := <-ir.reqCh:
+			case req := <-ir.reqCh:
 				if eof {
 					select {
-					case replyCh <- "":
-					default:
+					case req.replyCh <- "":
+					case <-req.ctx.Done():
 					}
-					close(replyCh)
+					close(req.replyCh)
 					continue
 				}
-				// We have a request. Now wait for a line from the reader.
+				// We have a request. Now wait for a line from the reader or the request context to cancel.
 				select {
 				case <-ctx.Done():
-					close(replyCh)
+					close(req.replyCh)
 					return
+				case <-req.ctx.Done():
+					close(req.replyCh)
+					continue // Ignore this request and wait for the next one
 				case line, ok := <-readDone:
 					if !ok {
 						eof = true
 						select {
-						case replyCh <- "":
-						default:
+						case req.replyCh <- "":
+						case <-req.ctx.Done():
 						}
 					} else {
 						select {
-						case replyCh <- line:
-						default:
+						case req.replyCh <- line:
+						case <-req.ctx.Done():
 						}
 					}
-					close(replyCh)
+					close(req.replyCh)
 				}
 			}
 		}
@@ -141,11 +150,15 @@ func (ir *interactiveReader) Close() {
 // Returns an empty string on EOF, read error, or context cancellation.
 func (ir *interactiveReader) readLine(ctx context.Context) string {
 	replyCh := make(chan string, 1)
+	req := readRequest{
+		replyCh: replyCh,
+		ctx:     ctx,
+	}
 
 	select {
 	case <-ctx.Done():
 		return ""
-	case ir.reqCh <- replyCh:
+	case ir.reqCh <- req:
 	}
 
 	select {
@@ -166,11 +179,15 @@ func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 	printer.Print("\nPress [Enter] to return to the menu...")
 
 	replyCh := make(chan string, 1)
+	req := readRequest{
+		replyCh: replyCh,
+		ctx:     ctx,
+	}
 
 	select {
 	case <-ctx.Done():
 		return
-	case ir.reqCh <- replyCh:
+	case ir.reqCh <- req:
 	}
 
 	select {
