@@ -435,7 +435,11 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 		}
 	}
 
-	// Atomically replace dataDir with tmpDataDir
+	// Atomically replace dataDir with tmpDataDir.
+	// Since tmpDataDir and backupDir are created in the same parent directory
+	// as dataDir (via filepath.Dir or by appending suffixes to dataDir),
+	// they are guaranteed to be on the same filesystem. This ensures os.Rename
+	// is an atomic operation and will not fail with EXDEV (cross-device link).
 	backupDir := fmt.Sprintf("%s.backup.%d.%d", dataDir, os.Getpid(), time.Now().UnixNano())
 	hasOld := true
 
