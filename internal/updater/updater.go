@@ -443,7 +443,13 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				}
 			} else {
 				if err := os.Symlink(linkTarget, destPath); err != nil {
-					return "", fmt.Errorf("updater: create symlink %q -> %q: %w", destPath, linkTarget, err)
+					// In environments where symlinks require elevated privileges (e.g. Windows without Developer Mode)
+					// or on unsupported filesystems, warn instead of failing the entire update abruptly.
+					slog.Warn("updater: skipping symlink creation due to filesystem/OS error",
+						"name", hdr.Name,
+						"target", linkTarget,
+						"error", err,
+					)
 				}
 			}
 		}
