@@ -102,7 +102,21 @@ func saveLocked(m *Manifest) error {
 	}
 
 	m.UpdatedAt = time.Now()
-	data, err := jsonutil.Marshal(m)
+
+	// Create a data transfer object to serialize without the sync.RWMutex.
+	// jsonutil.Marshal uses reflection which can cause data races if it reads
+	// the internal state of the embedded sync.RWMutex while another goroutine locks it.
+	type manifestDTO struct {
+		Apps      map[string]AppEntry `json:"apps"`
+		UpdatedAt time.Time           `json:"updated_at"`
+	}
+
+	dto := manifestDTO{
+		Apps:      m.Apps,
+		UpdatedAt: m.UpdatedAt,
+	}
+
+	data, err := jsonutil.Marshal(dto)
 	if err != nil {
 		return fmt.Errorf("manifest: marshal: %w", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -33,7 +34,22 @@ const downloadTimeout = 5 * time.Minute
 //   - TCP connection pooling is preserved between retry attempts.
 //   - TLS handshakes are amortised.
 //   - Transport-level timeout errors are not masked by re-initialisation.
-var downloaderClient = &http.Client{Timeout: downloadTimeout}
+var downloaderClient = &http.Client{
+	Timeout: downloadTimeout,
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // isNonRetryableError checks if an error represents a permanent client failure
 // (such as HTTP 404 Not Found or HTTP 403 Forbidden).
