@@ -166,7 +166,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 
 		// Match the entry whose base filename equals TarballInnerName.
 		cleanName := filepath.Clean(guard.SanitizeString(hdr.Name))
-		if strings.HasPrefix(cleanName, "..") {
+		if !filepath.IsLocal(cleanName) {
 			slog.Warn("updater: skipping potentially unsafe tar entry", "name", hdr.Name)
 			continue
 		}
@@ -306,7 +306,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 
 		// Sanitise the path to prevent directory traversal attacks.
 		cleanName := filepath.Clean(guard.SanitizeString(hdr.Name))
-		if strings.HasPrefix(cleanName, "..") {
+		if !filepath.IsLocal(cleanName) {
 			slog.Warn("updater: skipping potentially unsafe tar entry", "name", hdr.Name)
 			continue
 		}
@@ -338,7 +338,8 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 			// os.Create hardcodes 0666 and silently drops execute bits on auxiliary
 			// binaries (e.g. resources/bin/language_server). Using os.OpenFile with
 			// the header's mode followed by an explicit os.Chmod bypasses umask too.
-			fileMode := hdr.FileInfo().Mode()
+			// Mask the mode to 0777 to prevent SUID/SGID elevation.
+			fileMode := hdr.FileInfo().Mode() & 0777
 
 			err = func() error {
 				// Write to a uniquely-named temporary file first for atomic replacement.
@@ -397,6 +398,58 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 					!strings.Contains(slashPath, "/locales/") &&
 					!strings.HasPrefix(destPath, binDir+string(filepath.Separator)) {
 					candidateBinaries = append(candidateBinaries, destPath)
+				}
+			}
+		case tar.TypeSymlink, tar.TypeLink:
+			destPath := filepath.Join(tmpDataDir, cleanName)
+			// Ensure parent directory exists.
+			if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
+				return "", fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
+			}
+			linkTarget := hdr.Linkname
+
+			if filepath.IsAbs(linkTarget) {
+				slog.Warn("updater: skipping symlink with absolute target",
+					"name", hdr.Name,
+					"target", linkTarget,
+				)
+				continue
+			}
+
+			var absTarget string
+			if hdr.Typeflag == tar.TypeLink {
+				// Hardlinks are resolved relative to the archive root (tmpDataDir).
+				// #nosec G305 -- Target is verified safe immediately below using filepath.Rel.
+				absTarget = filepath.Join(tmpDataDir, linkTarget)
+			} else {
+				// Symlinks are resolved relative to the symlink's containing directory.
+				// #nosec G305 -- Target is verified safe immediately below using filepath.Rel.
+				absTarget = filepath.Join(filepath.Dir(destPath), linkTarget)
+			}
+
+			// Prevent symlinks/hardlinks escaping paths.
+			rel, err := filepath.Rel(tmpDataDir, absTarget)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				slog.Warn("updater: skipping link pointing outside extraction dir",
+					"name", hdr.Name,
+					"target", linkTarget,
+				)
+				continue
+			}
+
+			if hdr.Typeflag == tar.TypeLink {
+				if err := os.Link(absTarget, destPath); err != nil {
+					return "", fmt.Errorf("updater: create hardlink %q -> %q: %w", destPath, absTarget, err)
+				}
+			} else {
+				if err := os.Symlink(linkTarget, destPath); err != nil {
+					// In environments where symlinks require elevated privileges (e.g. Windows without Developer Mode)
+					// or on unsupported filesystems, warn instead of failing the entire update abruptly.
+					slog.Warn("updater: skipping symlink creation due to filesystem/OS error",
+						"name", hdr.Name,
+						"target", linkTarget,
+						"error", err,
+					)
 				}
 			}
 		}
