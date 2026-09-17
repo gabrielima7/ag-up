@@ -166,6 +166,12 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 		return "", err
 	}
 
+	// Explicitly close before returning success.
+	// If the final flush to disk fails, we trigger the defer cleanup.
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("downloader: close temp file for %q: %w", appID, err)
+	}
+
 	removeOnExit = false
 	return tmpPath, nil
 }

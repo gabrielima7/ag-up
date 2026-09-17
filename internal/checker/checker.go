@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -78,7 +79,22 @@ type CheckResult struct {
 // client is a shared HTTP client with a configured timeout.
 // Note: Accept-Encoding is NOT set manually so Go's transport handles
 // transparent gzip decompression for compressed responses.
-var client = &http.Client{Timeout: defaultHTTPTimeout}
+var client = &http.Client{
+	Timeout: defaultHTTPTimeout,
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	},
+}
 
 // cliManifest is the JSON structure returned by the Cloud Run auto-updater.
 type cliManifest struct {

@@ -199,7 +199,9 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 				_ = outFile.Close()
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
-			_ = outFile.Close()
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("updater: close %q: %w", tmpPath, err)
+			}
 
 			// Atomically replace the destination file
 			if err := os.Rename(tmpPath, destPath); err != nil {
@@ -363,7 +365,9 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 					_ = outFile.Close()
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
-				_ = outFile.Close()
+				if err := outFile.Close(); err != nil {
+					return fmt.Errorf("updater: close %q: %w", tmpPath, err)
+				}
 
 				// Atomically replace the destination file
 				if err := os.Rename(tmpPath, destPath); err != nil {
