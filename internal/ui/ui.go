@@ -83,6 +83,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 		readDone := make(chan string)
 		go func() {
 			defer close(readDone)
+			// Read one line per request loop rather than blocking infinitely when cancelled
 			for {
 				line, err := ir.reader.ReadString('\n')
 				// Wait for the dispatcher to be ready to accept, or cancellation
