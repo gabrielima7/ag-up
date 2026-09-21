@@ -187,16 +187,15 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			if err != nil {
 				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 			}
+			defer func() { _ = outFile.Close() }()
 			defer func() { _ = os.Remove(tmpPath) }()
 
 			if err := outFile.Chmod(0755); err != nil {
-				_ = outFile.Close()
 				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
 			if _, err := io.CopyBuffer(outFile, tr, *bufPtr); err != nil {
-				_ = outFile.Close()
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
 			if err := outFile.Close(); err != nil {
@@ -352,17 +351,16 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				if err != nil {
 					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 				}
+				defer func() { _ = outFile.Close() }()
 				defer func() { _ = os.Remove(tmpPath) }()
 
 				// Explicit chmod before write — safety net against umask stripping +x.
 				if err := outFile.Chmod(fileMode); err != nil {
-					_ = outFile.Close()
 					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 				}
 
 				// #nosec G110 — tarball size is capped by the download timeout.
 				if _, err := io.CopyBuffer(outFile, tr, *bufPtr); err != nil {
-					_ = outFile.Close()
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
 				if err := outFile.Close(); err != nil {

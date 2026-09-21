@@ -80,7 +80,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 	// We MUST NOT leak goroutines, so it listens to ctx.Done().
 	go func() {
 		// Dedicated goroutine for bufio.ReadString blocking call
-		readDone := make(chan string)
+		readDone := make(chan string, 1)
 		go func() {
 			defer close(readDone)
 			for {
