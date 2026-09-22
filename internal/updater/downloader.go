@@ -100,7 +100,11 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 	}()
 
 	err = retry.Do(ctx,
-		func(ctx context.Context) error {
+		func(attemptCtx context.Context) error {
+			// Apply a strict per-attempt timeout to prevent stalled downloads in a single attempt
+			reqCtx, reqCancel := context.WithTimeout(attemptCtx, 2*time.Minute)
+			defer reqCancel()
+
 			if err := f.Truncate(0); err != nil {
 				return fmt.Errorf("downloader: truncate temp file: %w", err)
 			}
@@ -108,7 +112,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 				return fmt.Errorf("downloader: seek temp file: %w", err)
 			}
 
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, safeURL, nil)
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, safeURL, nil)
 			if err != nil {
 				return fmt.Errorf("downloader: build request: %w", err)
 			}
@@ -116,15 +120,16 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 
 			resp, err := downloaderClient.Do(req)
 			if err != nil {
-				if ctx.Err() != nil {
-					return fmt.Errorf("downloader: request cancelled for %q: %w", appID, ctx.Err())
+				if attemptCtx.Err() != nil {
+					return fmt.Errorf("downloader: request cancelled for %q: %w", appID, attemptCtx.Err())
 				}
 				return fmt.Errorf("downloader: GET %q for %q: %w", safeURL, appID, err)
 			}
 			defer resp.Body.Close()
 
 			if resp.StatusCode != http.StatusOK {
-				_, _ = io.Copy(io.Discard, resp.Body)
+				// Use io.LimitReader to prevent hanging on unbounded error responses
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 				return fmt.Errorf(
 					"downloader: HTTP %d for %q (url: %s)",
 					resp.StatusCode, appID, safeURL,
@@ -136,8 +141,8 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 
 			written, err := io.CopyBuffer(f, resp.Body, *bufPtr)
 			if err != nil {
-				if ctx.Err() != nil {
-					return fmt.Errorf("downloader: body copy cancelled for %q: %w", appID, ctx.Err())
+				if reqCtx.Err() != nil {
+					return fmt.Errorf("downloader: body copy cancelled for %q: %w", appID, reqCtx.Err())
 				}
 				return fmt.Errorf("downloader: write body for %q: %w", appID, err)
 			}
