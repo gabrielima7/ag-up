@@ -64,6 +64,7 @@ type interactiveReader struct {
 	reader *bufio.Reader
 	reqCh  chan readRequest
 	cancel context.CancelFunc
+	ctx    context.Context
 }
 
 func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveReader {
@@ -72,6 +73,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 		reader: r,
 		reqCh:  make(chan readRequest),
 		cancel: cancel,
+		ctx:    ctx,
 	}
 
 	// Start a continuous reader loop in the background.
@@ -158,11 +160,15 @@ func (ir *interactiveReader) readLine(ctx context.Context) string {
 	select {
 	case <-ctx.Done():
 		return ""
+	case <-ir.ctx.Done():
+		return ""
 	case ir.reqCh <- req:
 	}
 
 	select {
 	case <-ctx.Done():
+		return ""
+	case <-ir.ctx.Done():
 		return ""
 	case line, ok := <-replyCh:
 		if !ok {
@@ -187,11 +193,14 @@ func (ir *interactiveReader) pressEnterToContinue(ctx context.Context) {
 	select {
 	case <-ctx.Done():
 		return
+	case <-ir.ctx.Done():
+		return
 	case ir.reqCh <- req:
 	}
 
 	select {
 	case <-ctx.Done():
+	case <-ir.ctx.Done():
 	case <-replyCh:
 	}
 }

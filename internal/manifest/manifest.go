@@ -68,10 +68,22 @@ func Load() (*Manifest, error) {
 		return newManifest(), fmt.Errorf("manifest: read %q: %w", path, err)
 	}
 
-	m := newManifest()
-	if err := jsonutil.Unmarshal(data, m); err != nil {
+	// Create a data transfer object to deserialize without the sync.RWMutex.
+	// jsonutil.Unmarshal uses reflection which can cause data races or manipulate
+	// the internal state of the embedded sync.RWMutex if passed directly.
+	type manifestDTO struct {
+		Apps      map[string]AppEntry `json:"apps"`
+		UpdatedAt time.Time           `json:"updated_at"`
+	}
+
+	var dto manifestDTO
+	if err := jsonutil.Unmarshal(data, &dto); err != nil {
 		return newManifest(), fmt.Errorf("manifest: parse %q: %w", path, err)
 	}
+
+	m := newManifest()
+	m.Apps = dto.Apps
+	m.UpdatedAt = dto.UpdatedAt
 
 	// Guard against a nil map (e.g., JSON with "apps": null).
 	if m.Apps == nil {
