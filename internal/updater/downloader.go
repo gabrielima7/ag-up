@@ -125,7 +125,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 				}
 				return fmt.Errorf("downloader: GET %q for %q: %w", safeURL, appID, err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			if resp.StatusCode != http.StatusOK {
 				// Use io.LimitReader to prevent hanging on unbounded error responses

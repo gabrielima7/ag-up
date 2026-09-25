@@ -31,13 +31,13 @@ func TestUpdateAllChaosRace(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/manifest.json" {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"version": "1.2.3", "url": "http://%s/agy.tar.gz", "sha512": ""}`+"\n", r.Host)
+			_, _ = fmt.Fprintf(w, `{"version": "1.2.3", "url": "http://%s/agy.tar.gz", "sha512": ""}`+"\n", r.Host)
 			return
 		}
 		if r.URL.Path == "/agy.tar.gz" {
 			// Delay slightly to ensure context cancellation occurs during the download phase
 			time.Sleep(50 * time.Millisecond)
-			w.Write([]byte("fake tarball data"))
+			_, _ = w.Write([]byte("fake tarball data"))
 			return
 		}
 	}))

@@ -179,7 +179,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 		destPath := filepath.Join(binDir, spec.BinaryName)
 
 		// Wrapping file extraction logic in a closure allows safe defer for os.Remove
-		err = func(buf []byte) error {
+		err = func(buf []byte, tr *tar.Reader, destPath string) error {
 			// Write to a uniquely-named temporary file first for atomic replacement.
 			// Incorporate os.Getpid() to prevent cross-process collisions.
 			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
@@ -208,7 +208,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
 			return nil
-		}(*bufPtr)
+		}(*bufPtr, tr, destPath)
 
 		if err != nil {
 			return err
@@ -343,7 +343,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 			// Mask the mode to 0777 to prevent SUID/SGID elevation.
 			fileMode := hdr.FileInfo().Mode() & 0777
 
-			err = func(buf []byte) error {
+			err = func(buf []byte, tr *tar.Reader, destPath string, fileMode os.FileMode) error {
 				// Write to a uniquely-named temporary file first for atomic replacement.
 				// This prevents returning ELOOP if destPath points to a dangling symlink,
 				// and ensures a crash doesn't leave corrupted partial files.
@@ -374,7 +374,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 					return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 				}
 				return nil
-			}(*bufPtr)
+			}(*bufPtr, tr, destPath, fileMode)
 
 			if err != nil {
 				return "", err
