@@ -116,7 +116,7 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 	if err != nil {
 		return fmt.Errorf("checker: GET %q: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
@@ -126,6 +126,9 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1*1024*1024)).Decode(dest); err != nil {
 		return fmt.Errorf("checker: decode JSON from %q: %w", url, err)
 	}
+
+	// Drain any remaining body data to allow the HTTP client to reuse the connection.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }
 
@@ -144,7 +147,7 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("checker: GET %q: %w", pageURL, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
