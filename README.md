@@ -1,6 +1,7 @@
 # ag-up · Google Antigravity Universal Updater
 
 [![Go 1.26+](https://img.shields.io/badge/go-1.26+-00ADD8?logo=go)](https://go.dev)
+[![CI / DevSecOps Pipeline](https://github.com/gabrielima7/ag-up/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielima7/ag-up/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![GopherCore](https://img.shields.io/badge/powered%20by-GopherCore-orange)](https://github.com/gabrielima7/GopherCore)
 
@@ -17,14 +18,17 @@
 | 🌐 **Web Page Scraper** | Regex parsing on `https://antigravity.google/download` for IDE & Hub links |
 | ☁️ **CLI JSON Manifest** | Fetches `{version, url, sha512}` from the Cloud Run auto-updater endpoint |
 | ⚡ **Parallel Updates** | Bounded concurrency (3 workers) via GopherCore `async.Map` |
+| 🧵 **Thread-Safe Console** | Centralized `printer.Mutex` eliminates data races and corrupted stdout output |
 | 🔁 **Resilient Networking** | Exponential backoff + jitter via GopherCore `retry`; fast-fails on HTTP 4xx |
-| 🛡️ **Input Sanitisation** | All paths and tar entries sanitised via GopherCore `guard`; directory-traversal protection |
+| 🔌 **Connection Pooling** | Bounded body draining (`io.LimitReader`) for persistent HTTP/1.1 keep-alive reuse |
+| 🛡️ **DevSecOps Hardening** | Tar extraction validates `filepath.IsLocal` (Zip Slip) and masks modes (`& 0777`) |
+| 🔒 **Atomic File Ops** | Atomic temp-file write-and-rename (`.tmp.<pid>.<nano>`) guarantees zero corruption on crash |
 | 🔐 **SHA-512 Verification** | Cryptographic integrity check on every CLI tarball before extraction |
 | 🧹 **Always-Clean Install** | Wipes previous `dataDir` with `os.RemoveAll` before every extraction — no ghost files |
 | 📋 **Structured Logging** | JSON logs via GopherCore `logkit` / `log/slog` (WARN+ only in interactive mode) |
 | 📁 **XDG Compliant** | Binaries in `~/.local/bin/`, data in `~/.local/share/antigravity/` |
 | 🖥️ **Desktop Integration** | Auto-generates `.desktop` launchers for GUI apps (IDE & Hub) |
-| 🗺️ **Version Manifest** | Fast JSON persistence via GopherCore `jsonutil` |
+| 🗺️ **Version Manifest** | Fast JSON persistence via GopherCore `jsonutil` with reflection-safe DTOs |
 | 🎛️ **Dual Mode** | Interactive terminal menu **or** non-interactive CLI flags |
 | 📊 **Real-time Feedback** | Per-step progress prints (`[app_id] Downloading…`, `Extracting…`, `Installing…`) |
 
@@ -61,7 +65,7 @@ go mod tidy
 go build -o ag-up .
 
 # (Optional) Build with version metadata embedded
-go build -ldflags "-X main.Version=v0.1.0" -o ag-up .
+go build -ldflags "-X main.Version=v0.2.0" -o ag-up .
 
 # Install to ~/.local/bin/ (XDG user binary directory)
 mkdir -p ~/.local/bin
@@ -85,7 +89,7 @@ $ ag-up
 
   ╔═══════════════════════════════════════════════╗
   ║       ag-up · Google Antigravity Updater      ║
-  ║              Universal Updater v0.1.0         ║
+  ║              Universal Updater v0.2.0         ║
   ╚═══════════════════════════════════════════════╝
 
   Choose an option:
@@ -294,16 +298,20 @@ ag-up/
 ├── main.go                    ← Entry point, flag parsing, signal handling, mode dispatch
 ├── go.mod
 ├── go.sum
+├── CHANGELOG.md               ← Comprehensive release history and PR changelog
 ├── README.md
+├── .github/
+│   └── workflows/ci.yml       ← CI / DevSecOps pipeline (gosec, govulncheck, race detector)
 ├── internal/
 │   ├── config/config.go       ← AppSpec definitions (agy, IDE, Hub) + endpoints
-│   ├── manifest/manifest.go   ← Local JSON manifest R/W (jsonutil, atomic write)
-│   ├── checker/checker.go     ← Remote version checks (retry + result + 4xx fast-fail)
+│   ├── manifest/manifest.go   ← Local JSON manifest R/W (sync.RWMutex, DTO, atomic write)
+│   ├── checker/checker.go     ← Remote version checks (retry + result + connection reuse)
 │   ├── updater/
 │   │   ├── updater.go         ← Download → verify → extract → symlink → manifest
 │   │   └── downloader.go      ← HTTP download with retry, shared client, temp-file cleanup
 │   ├── desktop/desktop.go     ← XDG .desktop launcher generator (guard + template)
-│   └── ui/ui.go               ← Interactive terminal menu (bufio.Reader, press-Enter pause)
+│   ├── printer/printer.go     ← Thread-safe synchronized console printer (mutex-guarded)
+│   └── ui/ui.go               ← Interactive terminal menu (context-aware interactiveReader)
 └── pkg/
     └── xdg/xdg.go             ← XDG Base Directory path helpers (os.UserHomeDir)
 ```
@@ -312,9 +320,20 @@ ag-up/
 
 - **Always-overwrite:** Every update unconditionally wipes and reinstalls. No version-match skip logic exists in the codebase.
 - **Delete-before-create:** Both extraction paths (`extractCLI`, `extractAndInstall`) call `os.Remove(destPath)` before opening any file for writing, preventing `ELOOP` errors from dangling symlinks left after `os.RemoveAll(dataDir)`.
+- **Thread-safe synchronized output (`internal/printer`):** All terminal writes from concurrent goroutines are synchronized through a centralized `sync.Mutex`, preventing data races and corrupted terminal tables.
+- **Atomic write-and-rename:** Binaries, desktop launchers, and JSON manifests are written to process-unique temporary files (`.tmp.<pid>.<nano>` / `os.CreateTemp`) with explicit permissions before atomic `os.Rename`, ensuring crash resilience.
+- **DTO-isolated JSON serialization:** Manifest serialization and deserialization utilize dedicated data transfer objects (`manifestDTO`) to decouple `sync.RWMutex` from reflection in `jsonutil.Marshal` and `Unmarshal`, eliminating lock corruption risks.
+- **Persistent HTTP connection pooling:** Response bodies are read and drained bounded via `io.LimitReader` allowing TCP/TLS connections to be returned to Go's transport pool without socket exhaustion.
+- **Context-bound interactive reading:** The interactive terminal reader unblocks immediately upon context cancellation or reader teardown (`ir.ctx.Done()`), avoiding lingering goroutines and channel deadlocks.
 - **Package-level HTTP client:** `downloader.go` uses a single `var downloaderClient` shared across all retry attempts, preserving TCP connection pooling and TLS sessions.
 - **4xx fast-fail in retry:** Both `checker.go` and `downloader.go` use `isNonRetryableHTTPError` to immediately abort on HTTP 400/401/403/404 instead of burning retry budget.
 - **bufio.Reader for TTY input:** The interactive menu uses `bufio.NewReader(os.Stdin).ReadString('\n')` + `strings.TrimSpace`, which handles `\r\n`, partial reads, and TTY-specific buffering edge cases that `bufio.Scanner` is susceptible to.
+
+---
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a complete list of changes, security fixes, and merged Pull Requests across versions.
 
 ---
 

@@ -34,7 +34,7 @@ import (
 )
 
 // Version is the current ag-up release version.
-const Version = "v0.1.0"
+const Version = "v0.2.0"
 
 // copyBufPool is a shared sync.Pool for 32KB buffers to eliminate heap
 // allocations during high-throughput file streaming (io.Copy).

@@ -30,7 +30,7 @@ import (
 )
 
 const defaultHTTPTimeout = 15 * time.Second
-const userAgent = "ag-up/v0.1.0"
+const userAgent = "ag-up/v0.2.0"
 
 // isNonRetryableHTTPError returns true for permanent client-side HTTP errors
 // (4xx) that will never succeed on retry. Mirrors the same helper in downloader.go.
