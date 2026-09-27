@@ -43,6 +43,16 @@ type desktopData struct {
 	StartupWMClass string
 }
 
+var parsedDesktopTemplate *template.Template
+
+func init() {
+	var err error
+	parsedDesktopTemplate, err = template.New("desktop").Parse(desktopTemplate)
+	if err != nil {
+		panic(fmt.Sprintf("desktop: failed to parse template: %v", err))
+	}
+}
+
 // Generate writes a valid .desktop launcher file for the given GUI AppSpec.
 // The file is placed at ~/.local/share/applications/<appID>.desktop.
 // It is safe to call on non-GUI apps — this function returns immediately
@@ -67,12 +77,6 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		StartupWMClass: guard.SanitizeString(spec.StartupWMClass),
 	}
 
-	tmpl, err := template.New("desktop").Parse(desktopTemplate)
-	if err != nil {
-		// Template parsing is deterministic; an error here is a bug.
-		return fmt.Errorf("desktop: parse template: %w", err)
-	}
-
 	destPath := filepath.Join(appsDir, guard.SanitizeString(spec.ID)+".desktop")
 
 	dir, file := filepath.Split(destPath)
@@ -90,7 +94,7 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: chmod %q: %w", tmpPath, err)
 	}
 
-	if err := tmpl.Execute(f, data); err != nil {
+	if err := parsedDesktopTemplate.Execute(f, data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("desktop: render %q: %w", tmpPath, err)
 	}

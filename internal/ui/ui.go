@@ -104,7 +104,10 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 			select {
 			case <-ctx.Done():
 				return
-			case req := <-ir.reqCh:
+			case req, ok := <-ir.reqCh:
+				if !ok {
+					return
+				}
 				if eof {
 					select {
 					case req.replyCh <- "":
