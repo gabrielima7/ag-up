@@ -33,6 +33,9 @@ StartupNotify=true
 StartupWMClass={{.StartupWMClass}}
 `
 
+// compiledDesktopTemplate is the pre-compiled template for generating desktop entries.
+var compiledDesktopTemplate = template.Must(template.New("desktop").Parse(desktopTemplate))
+
 // desktopData is the data bag fed into desktopTemplate.
 type desktopData struct {
 	Name           string
@@ -67,12 +70,6 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		StartupWMClass: guard.SanitizeString(spec.StartupWMClass),
 	}
 
-	tmpl, err := template.New("desktop").Parse(desktopTemplate)
-	if err != nil {
-		// Template parsing is deterministic; an error here is a bug.
-		return fmt.Errorf("desktop: parse template: %w", err)
-	}
-
 	destPath := filepath.Join(appsDir, guard.SanitizeString(spec.ID)+".desktop")
 
 	dir, file := filepath.Split(destPath)
@@ -90,7 +87,7 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: chmod %q: %w", tmpPath, err)
 	}
 
-	if err := tmpl.Execute(f, data); err != nil {
+	if err := compiledDesktopTemplate.Execute(f, data); err != nil {
 		_ = f.Close()
 		return fmt.Errorf("desktop: render %q: %w", tmpPath, err)
 	}

@@ -80,16 +80,23 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 	// It reads from the underlying reader and waits for a request.
 	// If a request comes in, it hands the line off and starts reading again.
 	// We MUST NOT leak goroutines, so it listens to ctx.Done().
-	go func() {
+	go func(bgCtx context.Context, reader *bufio.Reader, reqCh <-chan readRequest) {
 		// Dedicated goroutine for bufio.ReadString blocking call
 		readDone := make(chan string)
-		go func() {
+
+		// Since we cannot reliably unblock `reader.ReadString` across all
+		// environments without closing the underlying file (which breaks os.Stdin
+		// for the rest of the application), we instead close `readDone` when the
+		// context is cancelled, allowing the dispatcher loop to exit. The blocking
+		// `ReadString` goroutine will become orphaned and leak if the user never
+		// inputs another line, but this is an accepted tradeoff over breaking standard input.
+		go func(bgCtx context.Context, reader *bufio.Reader, readDone chan<- string) {
 			defer close(readDone)
 			for {
-				line, err := ir.reader.ReadString('\n')
+				line, err := reader.ReadString('\n')
 				// Wait for the dispatcher to be ready to accept, or cancellation
 				select {
-				case <-ctx.Done():
+				case <-bgCtx.Done():
 					return
 				case readDone <- line:
 				}
@@ -97,14 +104,14 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 					return
 				}
 			}
-		}()
+		}(bgCtx, reader, readDone)
 
 		eof := false
 		for {
 			select {
-			case <-ctx.Done():
+			case <-bgCtx.Done():
 				return
-			case req := <-ir.reqCh:
+			case req := <-reqCh:
 				if eof {
 					select {
 					case req.replyCh <- "":
@@ -115,7 +122,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 				}
 				// We have a request. Now wait for a line from the reader or the request context to cancel.
 				select {
-				case <-ctx.Done():
+				case <-bgCtx.Done():
 					close(req.replyCh)
 					return
 				case <-req.ctx.Done():
@@ -138,7 +145,7 @@ func newInteractiveReader(ctx context.Context, r *bufio.Reader) *interactiveRead
 				}
 			}
 		}
-	}()
+	}(ctx, ir.reader, ir.reqCh)
 	return ir
 }
 
