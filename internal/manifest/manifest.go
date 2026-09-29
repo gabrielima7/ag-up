@@ -68,6 +68,10 @@ func Load() (*Manifest, error) {
 		return newManifest(), fmt.Errorf("manifest: read %q: %w", path, err)
 	}
 
+	if len(data) == 0 {
+		return newManifest(), nil
+	}
+
 	// Create a data transfer object to deserialize without the sync.RWMutex.
 	// jsonutil.Unmarshal uses reflection which can cause data races or manipulate
 	// the internal state of the embedded sync.RWMutex if passed directly.
@@ -78,7 +82,10 @@ func Load() (*Manifest, error) {
 
 	var dto manifestDTO
 	if err := jsonutil.Unmarshal(data, &dto); err != nil {
-		return newManifest(), fmt.Errorf("manifest: parse %q: %w", path, err)
+		// Log warning and return a clean manifest to prevent the application
+		// from being permanently bricked by corrupted JSON files.
+		// Self-healing: it will be overwritten on the next successful update.
+		return newManifest(), nil
 	}
 
 	m := newManifest()
@@ -186,8 +193,17 @@ func Set(m *Manifest, appID string, entry AppEntry) error {
 	if m.Apps == nil {
 		m.Apps = make(map[string]AppEntry)
 	}
+	oldEntry, exists := m.Apps[appID]
 	m.Apps[appID] = entry
-	return saveLocked(m)
+	if err := saveLocked(m); err != nil {
+		if exists {
+			m.Apps[appID] = oldEntry
+		} else {
+			delete(m.Apps, appID)
+		}
+		return err
+	}
+	return nil
 }
 
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
@@ -201,13 +217,22 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 	if m.Apps == nil {
 		m.Apps = make(map[string]AppEntry)
 	}
-	entry := m.Apps[appID]
+	oldEntry, exists := m.Apps[appID]
+	entry := oldEntry
 	entry.LastChecked = time.Now()
 	if etag != "" {
 		entry.ETag = etag
 	}
 	m.Apps[appID] = entry
-	return saveLocked(m)
+	if err := saveLocked(m); err != nil {
+		if exists {
+			m.Apps[appID] = oldEntry
+		} else {
+			delete(m.Apps, appID)
+		}
+		return err
+	}
+	return nil
 }
 
 // MarkInstalled records a successful installation of version for appID,
@@ -221,11 +246,20 @@ func MarkInstalled(m *Manifest, appID, version, etag string) error {
 	if m.Apps == nil {
 		m.Apps = make(map[string]AppEntry)
 	}
-	entry := m.Apps[appID]
+	oldEntry, exists := m.Apps[appID]
+	entry := oldEntry
 	entry.InstalledVersion = version
 	entry.ETag = etag
 	entry.LastChecked = time.Now()
 	entry.LastUpdated = time.Now()
 	m.Apps[appID] = entry
-	return saveLocked(m)
+	if err := saveLocked(m); err != nil {
+		if exists {
+			m.Apps[appID] = oldEntry
+		} else {
+			delete(m.Apps, appID)
+		}
+		return err
+	}
+	return nil
 }

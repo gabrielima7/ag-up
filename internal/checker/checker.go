@@ -281,12 +281,15 @@ func fetchLatestRelease(
 	maxRetries int,
 ) result.Result[CheckResult] {
 	cr, err := retry.DoWithValue(ctx,
-		func(ctx context.Context) (CheckResult, error) {
+		func(attemptCtx context.Context) (CheckResult, error) {
+			reqCtx, reqCancel := context.WithTimeout(attemptCtx, 15*time.Second)
+			defer reqCancel()
+
 			if spec.ManifestURL != "" {
-				return fetchCLIManifest(ctx, spec, localEntry)
+				return fetchCLIManifest(reqCtx, spec, localEntry)
 			}
 			if spec.WebReleasePage != "" {
-				return scrapeDownloadPage(ctx, spec, localEntry)
+				return scrapeDownloadPage(reqCtx, spec, localEntry)
 			}
 			return CheckResult{}, fmt.Errorf("checker: AppSpec %q has no ManifestURL or WebReleasePage configured", spec.ID)
 		},
@@ -329,8 +332,9 @@ func Check(
 	m *manifest.Manifest,
 	maxRetries int,
 ) result.Result[CheckResult] {
-	// Add timeout to prevent dangling goroutines or infinite blocks on network calls
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Add timeout to prevent dangling goroutines or infinite blocks on network calls.
+	// Generous enough to allow maxRetries with exponential backoff (up to ~1 min total).
+	timeoutCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
 	localEntry, _ := manifest.Get(m, spec.ID)
