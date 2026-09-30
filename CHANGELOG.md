@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Unit Test Suite for Manifest (`internal/manifest`):** Added comprehensive tests covering 0-byte manifest self-healing, corrupt JSON recovery with warning logs, round-trip persistence, and in-memory rollback on disk write failures.
+
+### Fixed (Resilience & DevSecOps Hardening)
+- **Manifest Self-Healing & In-Memory Rollback (`internal/manifest`):**
+  - Handled 0-byte and corrupted manifest files gracefully by returning a clean manifest with structured warning logs (`slog.Warn`), preventing fatal startup failures.
+  - Implemented automatic rollback of in-memory application entries in `Set()`, `MarkChecked()`, and `MarkInstalled()` if disk writes (`saveLocked`) fail.
+- **Checker Per-Attempt HTTP Timeout (`internal/checker`):**
+  - Introduced a 15-second per-attempt timeout in `fetchLatestRelease` retry loop to prevent Slowloris and hung sockets from blocking retries.
+  - Increased top-level `Check` timeout to 2 minutes to accommodate full exponential backoff.
+- **Updater File Descriptor & Cleanup Hardening (`internal/updater`):**
+  - Guaranteed `outFile.Close()` is deferred before temporary file removal (`os.Remove`), preventing `Access is denied` errors on Windows during extraction failures.
+  - Prevented unnecessary remove attempts on successful atomic rename via `removeOnExit` flag.
+
 ## [v0.2.0] - 2026-09-25
 
 ### Summary
