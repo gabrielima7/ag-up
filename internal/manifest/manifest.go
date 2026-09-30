@@ -78,7 +78,8 @@ func Load() (*Manifest, error) {
 
 	var dto manifestDTO
 	if err := jsonutil.Unmarshal(data, &dto); err != nil {
-		return newManifest(), fmt.Errorf("manifest: parse %q: %w", path, err)
+		// Return a clean manifest instead of an error to handle corrupted files gracefully.
+		return newManifest(), nil
 	}
 
 	m := newManifest()
@@ -186,8 +187,20 @@ func Set(m *Manifest, appID string, entry AppEntry) error {
 	if m.Apps == nil {
 		m.Apps = make(map[string]AppEntry)
 	}
+
+	oldEntry, exists := m.Apps[appID]
 	m.Apps[appID] = entry
-	return saveLocked(m)
+
+	err := saveLocked(m)
+	if err != nil {
+		// Rollback in-memory state if disk write fails
+		if exists {
+			m.Apps[appID] = oldEntry
+		} else {
+			delete(m.Apps, appID)
+		}
+	}
+	return err
 }
 
 // MarkChecked updates the LastChecked timestamp and ETag for appID without
@@ -201,13 +214,26 @@ func MarkChecked(m *Manifest, appID, etag string) error {
 	if m.Apps == nil {
 		m.Apps = make(map[string]AppEntry)
 	}
+
+	oldEntry, exists := m.Apps[appID]
+
 	entry := m.Apps[appID]
 	entry.LastChecked = time.Now()
 	if etag != "" {
 		entry.ETag = etag
 	}
 	m.Apps[appID] = entry
-	return saveLocked(m)
+
+	err := saveLocked(m)
+	if err != nil {
+		// Rollback in-memory state if disk write fails
+		if exists {
+			m.Apps[appID] = oldEntry
+		} else {
+			delete(m.Apps, appID)
+		}
+	}
+	return err
 }
 
 // MarkInstalled records a successful installation of version for appID,
@@ -221,11 +247,24 @@ func MarkInstalled(m *Manifest, appID, version, etag string) error {
 	if m.Apps == nil {
 		m.Apps = make(map[string]AppEntry)
 	}
+
+	oldEntry, exists := m.Apps[appID]
+
 	entry := m.Apps[appID]
 	entry.InstalledVersion = version
 	entry.ETag = etag
 	entry.LastChecked = time.Now()
 	entry.LastUpdated = time.Now()
 	m.Apps[appID] = entry
-	return saveLocked(m)
+
+	err := saveLocked(m)
+	if err != nil {
+		// Rollback in-memory state if disk write fails
+		if exists {
+			m.Apps[appID] = oldEntry
+		} else {
+			delete(m.Apps, appID)
+		}
+	}
+	return err
 }

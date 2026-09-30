@@ -187,18 +187,24 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			if err != nil {
 				return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 			}
-			defer func() { _ = os.Remove(tmpPath) }()
+
+			removeOnExit := true
+			defer func(p string) {
+				if removeOnExit {
+					_ = os.Remove(p)
+				}
+			}(tmpPath)
+			defer func() { _ = outFile.Close() }()
 
 			if err := outFile.Chmod(0755); err != nil {
-				_ = outFile.Close()
 				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
 			if _, err := io.CopyBuffer(outFile, tr, buf); err != nil {
-				_ = outFile.Close()
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
+
 			if err := outFile.Close(); err != nil {
 				return fmt.Errorf("updater: close %q: %w", tmpPath, err)
 			}
@@ -207,6 +213,8 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			if err := os.Rename(tmpPath, destPath); err != nil {
 				return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 			}
+
+			removeOnExit = false
 			return nil
 		}(*bufPtr, tr, destPath)
 
@@ -352,19 +360,25 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				if err != nil {
 					return fmt.Errorf("updater: create temp file %q: %w", tmpPath, err)
 				}
-				defer func() { _ = os.Remove(tmpPath) }()
+
+				removeOnExit := true
+				defer func(p string) {
+					if removeOnExit {
+						_ = os.Remove(p)
+					}
+				}(tmpPath)
+				defer func() { _ = outFile.Close() }()
 
 				// Explicit chmod before write — safety net against umask stripping +x.
 				if err := outFile.Chmod(fileMode); err != nil {
-					_ = outFile.Close()
 					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 				}
 
 				// #nosec G110 — tarball size is capped by the download timeout.
 				if _, err := io.CopyBuffer(outFile, tr, buf); err != nil {
-					_ = outFile.Close()
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
+
 				if err := outFile.Close(); err != nil {
 					return fmt.Errorf("updater: close %q: %w", tmpPath, err)
 				}
@@ -373,6 +387,8 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				if err := os.Rename(tmpPath, destPath); err != nil {
 					return fmt.Errorf("updater: rename to %q: %w", destPath, err)
 				}
+
+				removeOnExit = false
 				return nil
 			}(*bufPtr, tr, destPath, fileMode)
 
