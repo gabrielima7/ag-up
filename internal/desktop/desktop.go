@@ -91,6 +91,10 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		_ = f.Close()
 		return fmt.Errorf("desktop: render %q: %w", tmpPath, err)
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("desktop: sync temp file %q: %w", tmpPath, err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("desktop: close temp file %q: %w", tmpPath, err)
 	}
@@ -270,6 +274,11 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 	if _, err := tmp.WriteString(newContent); err != nil {
 		_ = tmp.Close()
 		slog.Warn("desktop: sync legacy: write failed", "path", tmpPath, "error", err)
+		return false
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		slog.Warn("desktop: sync legacy: sync failed", "path", tmpPath, "error", err)
 		return false
 	}
 	if err := tmp.Close(); err != nil {
