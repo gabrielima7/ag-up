@@ -127,14 +127,18 @@ func saveLocked(m *Manifest) error {
 	// Create a data transfer object to serialize without the sync.RWMutex.
 	// jsonutil.Marshal uses reflection which can cause data races if it reads
 	// the internal state of the embedded sync.RWMutex while another goroutine locks it.
+	// Copy the map to prevent races if other goroutines read it concurrently (though we hold Lock here).
 	type manifestDTO struct {
 		Apps      map[string]AppEntry `json:"apps"`
 		UpdatedAt time.Time           `json:"updated_at"`
 	}
 
 	dto := manifestDTO{
-		Apps:      m.Apps,
+		Apps:      make(map[string]AppEntry, len(m.Apps)),
 		UpdatedAt: m.UpdatedAt,
+	}
+	for k, v := range m.Apps {
+		dto.Apps[k] = v
 	}
 
 	data, err := jsonutil.Marshal(dto)
@@ -160,6 +164,10 @@ func saveLocked(m *Manifest) error {
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("manifest: sync temp file %q: %w", tmpPath, err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("manifest: close temp file %q: %w", tmpPath, err)
