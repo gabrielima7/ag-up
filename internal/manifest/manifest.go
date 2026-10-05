@@ -132,8 +132,13 @@ func saveLocked(m *Manifest) error {
 		UpdatedAt time.Time           `json:"updated_at"`
 	}
 
+	appsCopy := make(map[string]AppEntry, len(m.Apps))
+	for k, v := range m.Apps {
+		appsCopy[k] = v
+	}
+
 	dto := manifestDTO{
-		Apps:      m.Apps,
+		Apps:      appsCopy,
 		UpdatedAt: m.UpdatedAt,
 	}
 
@@ -160,6 +165,10 @@ func saveLocked(m *Manifest) error {
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return fmt.Errorf("manifest: sync temp file %q: %w", tmpPath, err)
 	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("manifest: close temp file %q: %w", tmpPath, err)
