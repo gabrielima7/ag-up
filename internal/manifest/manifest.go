@@ -161,6 +161,9 @@ func saveLocked(m *Manifest) error {
 		_ = tmpFile.Close()
 		return fmt.Errorf("manifest: write temp file %q: %w", tmpPath, err)
 	}
+	if err := tmpFile.Sync(); err != nil {
+		return fmt.Errorf("manifest: sync temp file %q: %w", tmpPath, err)
+	}
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("manifest: close temp file %q: %w", tmpPath, err)
 	}
