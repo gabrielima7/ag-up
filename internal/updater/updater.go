@@ -204,6 +204,11 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
 
+			if err := outFile.Sync(); err != nil {
+				_ = outFile.Close()
+
+				return fmt.Errorf("updater: sync %q: %w", tmpPath, err)
+			}
 			if err := outFile.Close(); err != nil {
 				return fmt.Errorf("updater: close %q: %w", tmpPath, err)
 			}
@@ -377,6 +382,11 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
 
+				if err := outFile.Sync(); err != nil {
+					_ = outFile.Close()
+
+					return fmt.Errorf("updater: sync %q: %w", tmpPath, err)
+				}
 				if err := outFile.Close(); err != nil {
 					return fmt.Errorf("updater: close %q: %w", tmpPath, err)
 				}
