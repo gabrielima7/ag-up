@@ -101,8 +101,10 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 
 	err = retry.Do(ctx,
 		func(attemptCtx context.Context) error {
-			// Apply a strict per-attempt timeout to prevent stalled downloads in a single attempt
-			reqCtx, reqCancel := context.WithTimeout(attemptCtx, 2*time.Minute)
+			// Apply a strict per-attempt timeout to prevent stalled downloads in a single attempt.
+			// Increased to 5 minutes to accommodate large downloads over slower connections,
+			// matching the global download timeout.
+			reqCtx, reqCancel := context.WithTimeout(attemptCtx, 5*time.Minute)
 			defer reqCancel()
 
 			if err := f.Truncate(0); err != nil {

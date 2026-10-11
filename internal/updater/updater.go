@@ -42,6 +42,25 @@ var copyBufPool = sync.Pool{
 	New: func() any { b := make([]byte, 32*1024); return &b },
 }
 
+// hardLimitReader wraps an io.Reader and returns an error if the number of bytes
+// read exceeds the specified limit, preventing zip/tar bombs. Unlike io.LimitReader,
+// which returns EOF (silently truncating the file), this ensures the caller knows
+// the limit was breached.
+type hardLimitReader struct {
+	r     io.Reader
+	limit int64
+	read  int64
+}
+
+func (l *hardLimitReader) Read(p []byte) (n int, err error) {
+	n, err = l.r.Read(p)
+	l.read += int64(n)
+	if l.read > l.limit {
+		return n, fmt.Errorf("hard limit exceeded: file larger than %d bytes", l.limit)
+	}
+	return n, err
+}
+
 func safePrint(format string, a ...any) {
 	printer.Printf(format, a...)
 }
@@ -199,8 +218,10 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 			}
 
-			// #nosec G110 — tarball size is capped by the download timeout.
-			if _, err := io.CopyBuffer(outFile, tr, buf); err != nil {
+			// Enforce a hard limit of 2GB per extracted file to prevent tar bombs.
+			// #nosec G110 — mitigated by hardLimitReader.
+			limitReader := &hardLimitReader{r: tr, limit: 2 * 1024 * 1024 * 1024}
+			if _, err := io.CopyBuffer(outFile, limitReader, buf); err != nil {
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
 
@@ -376,8 +397,10 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 					return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
 				}
 
-				// #nosec G110 — tarball size is capped by the download timeout.
-				if _, err := io.CopyBuffer(outFile, tr, buf); err != nil {
+				// Enforce a hard limit of 2GB per extracted file to prevent tar bombs.
+				// #nosec G110 — mitigated by hardLimitReader.
+				limitReader := &hardLimitReader{r: tr, limit: 2 * 1024 * 1024 * 1024}
+				if _, err := io.CopyBuffer(outFile, limitReader, buf); err != nil {
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
 
