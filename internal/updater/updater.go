@@ -42,6 +42,30 @@ var copyBufPool = sync.Pool{
 	New: func() any { b := make([]byte, 32*1024); return &b },
 }
 
+// hardLimitReader is a custom io.Reader that returns an error when the limit is reached,
+// rather than silently truncating files like io.LimitReader.
+type hardLimitReader struct {
+	r     io.Reader
+	n     int64
+	limit int64
+}
+
+func (l *hardLimitReader) Read(p []byte) (int, error) {
+	if l.n >= l.limit {
+		return 0, fmt.Errorf("hard limit reached: exceeded %d bytes", l.limit)
+	}
+	remaining := l.limit - l.n
+	if int64(len(p)) > remaining {
+		p = p[0 : remaining+1] // Read 1 extra byte to detect overflow
+	}
+	n, err := l.r.Read(p)
+	l.n += int64(n)
+	if l.n > l.limit {
+		return n, fmt.Errorf("hard limit reached: exceeded %d bytes", l.limit)
+	}
+	return n, err
+}
+
 func safePrint(format string, a ...any) {
 	printer.Printf(format, a...)
 }
@@ -200,7 +224,9 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 			}
 
 			// #nosec G110 — tarball size is capped by the download timeout.
-			if _, err := io.CopyBuffer(outFile, tr, buf); err != nil {
+			// Apply a hard limit of 2GB for extraction to prevent zip bombs
+			limitedReader := &hardLimitReader{r: tr, limit: 2 * 1024 * 1024 * 1024}
+			if _, err := io.CopyBuffer(outFile, limitedReader, buf); err != nil {
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
 
@@ -377,7 +403,9 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				}
 
 				// #nosec G110 — tarball size is capped by the download timeout.
-				if _, err := io.CopyBuffer(outFile, tr, buf); err != nil {
+				// Apply a hard limit of 2GB for extraction to prevent zip bombs
+				limitedReader := &hardLimitReader{r: tr, limit: 2 * 1024 * 1024 * 1024}
+				if _, err := io.CopyBuffer(outFile, limitedReader, buf); err != nil {
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
 
