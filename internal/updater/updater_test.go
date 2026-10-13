@@ -2,13 +2,16 @@ package updater
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -226,4 +229,108 @@ func TestExtractAndInstallZipSlipAndHardening(t *testing.T) {
 		t.Errorf("security failure: escaping symlink %q was created", badSymPath)
 	}
 }
+
+func TestHardLimitReader(t *testing.T) {
+	t.Run("under_limit", func(t *testing.T) {
+		data := []byte("hello world under limit")
+		r := &hardLimitReader{r: bytes.NewReader(data), limit: 100}
+		buf := make([]byte, 10)
+		var total int
+		for {
+			n, err := r.Read(buf)
+			total += n
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		}
+		if total != len(data) {
+			t.Errorf("expected %d bytes, read %d", len(data), total)
+		}
+	})
+
+	t.Run("exact_limit", func(t *testing.T) {
+		data := make([]byte, 64)
+		for i := range data {
+			data[i] = byte(i)
+		}
+		r := &hardLimitReader{r: bytes.NewReader(data), limit: 64}
+		buf := make([]byte, 16)
+		var total int
+		for {
+			n, err := r.Read(buf)
+			total += n
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("unexpected error reading exact limit: %v", err)
+			}
+		}
+		if total != 64 {
+			t.Errorf("expected 64 bytes, read %d", total)
+		}
+
+		// Subsequent read should cleanly return 0, io.EOF without false error
+		n, err := r.Read(buf)
+		if n != 0 || err != io.EOF {
+			t.Errorf("expected (0, EOF), got (%d, %v)", n, err)
+		}
+	})
+
+	t.Run("exceeds_limit", func(t *testing.T) {
+		data := make([]byte, 128)
+		r := &hardLimitReader{r: bytes.NewReader(data), limit: 50}
+		buf := make([]byte, 32)
+		var readErr error
+		for {
+			_, err := r.Read(buf)
+			if err != nil {
+				readErr = err
+				break
+			}
+		}
+		if readErr == nil {
+			t.Fatalf("expected error when reading beyond limit, got nil")
+		}
+		if !strings.Contains(readErr.Error(), "hard limit exceeded") {
+			t.Errorf("expected 'hard limit exceeded' error, got %v", readErr)
+		}
+
+		// Subsequent read should also fail immediately without further reading
+		n, err := r.Read(buf)
+		if n != 0 || err == nil || !strings.Contains(err.Error(), "hard limit exceeded") {
+			t.Errorf("expected reentrant error on subsequent read, got n=%d err=%v", n, err)
+		}
+	})
+
+	t.Run("empty_reader", func(t *testing.T) {
+		r := &hardLimitReader{r: bytes.NewReader(nil), limit: 10}
+		buf := make([]byte, 10)
+		n, err := r.Read(buf)
+		if n != 0 || err != io.EOF {
+			t.Errorf("expected (0, EOF) on empty reader, got (%d, %v)", n, err)
+		}
+	})
+}
+
+func TestDecompressionBombProtection(t *testing.T) {
+	// Verify that hardLimitReader prevents unbounded decompression in an io.Copy buffer pipeline
+	oversizedData := bytes.Repeat([]byte("A"), 1024*1024) // 1MB payload
+	smallLimit := int64(256 * 1024)                        // 256KB limit
+	r := &hardLimitReader{r: bytes.NewReader(oversizedData), limit: smallLimit}
+
+	var out bytes.Buffer
+	buf := make([]byte, 32*1024)
+	_, err := io.CopyBuffer(&out, r, buf)
+	if err == nil {
+		t.Fatalf("expected error from io.CopyBuffer on bomb data, got nil")
+	}
+	if !strings.Contains(err.Error(), "hard limit exceeded") {
+		t.Errorf("expected hard limit exceeded, got: %v", err)
+	}
+}
+
 
