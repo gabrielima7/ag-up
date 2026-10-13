@@ -26,8 +26,8 @@ import (
 // userAgent is the HTTP User-Agent header sent on all outbound requests.
 const userAgent = "ag-up/" + Version
 
-// downloadTimeout caps the total duration allowed for a single tarball download.
-const downloadTimeout = 5 * time.Minute
+// downloadTimeout caps the total duration allowed for a single tarball download (including retries).
+const downloadTimeout = 10 * time.Minute
 
 // downloaderClient is a package-level HTTP client shared across all download
 // attempts. Reusing a single client and its underlying transport means:
@@ -103,7 +103,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 		func(attemptCtx context.Context) error {
 			// Apply a strict per-attempt timeout to prevent stalled downloads in a single attempt.
 			// Increased to 5 minutes to accommodate large downloads over slower connections,
-			// matching the global download timeout.
+			// while leaving sufficient headroom within the 10-minute global download timeout for retries.
 			reqCtx, reqCancel := context.WithTimeout(attemptCtx, 5*time.Minute)
 			defer reqCancel()
 

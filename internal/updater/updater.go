@@ -42,6 +42,10 @@ var copyBufPool = sync.Pool{
 	New: func() any { b := make([]byte, 32*1024); return &b },
 }
 
+// maxFileExtractionLimit caps the uncompressed size of any single extracted file (2GB)
+// to prevent decompression bombs (Zip/Tar bombs, CWE-409).
+const maxFileExtractionLimit int64 = 2 * 1024 * 1024 * 1024
+
 // hardLimitReader wraps an io.Reader and returns an error if the number of bytes
 // read exceeds the specified limit, preventing zip/tar bombs. Unlike io.LimitReader,
 // which returns EOF (silently truncating the file), this ensures the caller knows
@@ -53,6 +57,9 @@ type hardLimitReader struct {
 }
 
 func (l *hardLimitReader) Read(p []byte) (n int, err error) {
+	if l.read > l.limit {
+		return 0, fmt.Errorf("hard limit exceeded: file larger than %d bytes", l.limit)
+	}
 	n, err = l.r.Read(p)
 	l.read += int64(n)
 	if l.read > l.limit {
@@ -220,7 +227,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 
 			// Enforce a hard limit of 2GB per extracted file to prevent tar bombs.
 			// #nosec G110 — mitigated by hardLimitReader.
-			limitReader := &hardLimitReader{r: tr, limit: 2 * 1024 * 1024 * 1024}
+			limitReader := &hardLimitReader{r: tr, limit: maxFileExtractionLimit}
 			if _, err := io.CopyBuffer(outFile, limitReader, buf); err != nil {
 				return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 			}
@@ -399,7 +406,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 
 				// Enforce a hard limit of 2GB per extracted file to prevent tar bombs.
 				// #nosec G110 — mitigated by hardLimitReader.
-				limitReader := &hardLimitReader{r: tr, limit: 2 * 1024 * 1024 * 1024}
+				limitReader := &hardLimitReader{r: tr, limit: maxFileExtractionLimit}
 				if _, err := io.CopyBuffer(outFile, limitReader, buf); err != nil {
 					return fmt.Errorf("updater: write %q: %w", tmpPath, err)
 				}
