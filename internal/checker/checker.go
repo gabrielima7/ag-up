@@ -30,7 +30,7 @@ import (
 )
 
 const defaultHTTPTimeout = 15 * time.Second
-const userAgent = "ag-up/v0.2.0"
+const userAgent = "ag-up/v0.2.1"
 
 // isNonRetryableHTTPError returns true for permanent client-side HTTP errors
 // (4xx) that will never succeed on retry. Mirrors the same helper in downloader.go.
@@ -116,6 +116,9 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 	if err != nil {
 		return fmt.Errorf("checker: GET %q: %w", url, err)
 	}
+	if resp == nil {
+		return fmt.Errorf("checker: GET %q returned nil response", url)
+	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
@@ -146,6 +149,9 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("checker: GET %q: %w", pageURL, err)
+	}
+	if resp == nil {
+		return "", fmt.Errorf("checker: GET %q returned nil response", pageURL)
 	}
 	defer func() { _ = resp.Body.Close() }()
 

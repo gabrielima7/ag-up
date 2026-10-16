@@ -9,19 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Unit Test Suite for Manifest (`internal/manifest`):** Added comprehensive tests covering 0-byte manifest self-healing, corrupt JSON recovery with warning logs, round-trip persistence, and in-memory rollback on disk write failures.
+## [v0.2.1] - 2026-10-16
 
-### Fixed (Resilience & DevSecOps Hardening)
-- **Manifest Self-Healing & In-Memory Rollback (`internal/manifest`):**
-  - Handled 0-byte and corrupted manifest files gracefully by returning a clean manifest with structured warning logs (`slog.Warn`), preventing fatal startup failures.
-  - Implemented automatic rollback of in-memory application entries in `Set()`, `MarkChecked()`, and `MarkInstalled()` if disk writes (`saveLocked`) fail.
-- **Checker Per-Attempt HTTP Timeout (`internal/checker`):**
-  - Introduced a 15-second per-attempt timeout in `fetchLatestRelease` retry loop to prevent Slowloris and hung sockets from blocking retries.
-  - Increased top-level `Check` timeout to 2 minutes to accommodate full exponential backoff.
-- **Updater File Descriptor & Cleanup Hardening (`internal/updater`):**
-  - Guaranteed `outFile.Close()` is deferred before temporary file removal (`os.Remove`), preventing `Access is denied` errors on Windows during extraction failures.
-  - Prevented unnecessary remove attempts on successful atomic rename via `removeOnExit` flag.
+### Summary
+`v0.2.1` is a resilience, security hardening, and reliability maintenance release. It incorporates 5 merged Pull Requests resolving potential goroutine leaks in the interactive UI, race conditions in manifest serialization, Zip/Tar decompression bomb vulnerabilities (CWE-409), filesystem durability during atomic file operations via `fsync`, and automatic creation of the XDG applications directory. In addition, it integrates `GopherCore v0.5.0` (dual Go 1.26/1.27 compatibility, ultimate chaos load verification, and context-aware circuit breaking) alongside updates across all direct and indirect dependencies.
+
+### Added
+- **Decompression Bomb (Zip/Tar Bomb) Defense (`internal/updater`):** Implemented `hardLimitReader` to enforce a 2GB upper bound (`maxFileExtractionLimit`) on any single extracted uncompressed file, neutralizing decompression bomb attacks (CWE-409) while avoiding silent truncation ([PR #52](https://github.com/gabrielima7/ag-up/pull/52)).
+- **Comprehensive Unit Tests for Manifest (`internal/manifest`):** Added a dedicated test suite (`internal/manifest/manifest_test.go`) covering 0-byte manifest self-healing, corrupt JSON recovery with structured warning logs, round-trip persistence, and in-memory rollback on disk write failures ([PR #43](https://github.com/gabrielima7/ag-up/pull/43), [PR #44](https://github.com/gabrielima7/ag-up/pull/44)).
+- **Decompression Bomb & Hard Limit Unit Tests (`internal/updater`):** Added unit tests in `internal/updater/updater_test.go` (`TestHardLimitReader`, `TestDecompressionBombProtection`) verifying exact-limit reads, EOF handling, beyond-limit error escalation, and reentrant safety ([PR #52](https://github.com/gabrielima7/ag-up/pull/52)).
+- **Automatic Directory Provisioning (`internal/desktop`):** Added `os.MkdirAll(appsDir, 0750)` in `desktop.Generate` to guarantee that `~/.local/share/applications/` exists before attempting to write `.desktop` files, preventing installation errors on clean or minimalist Linux systems ([PR #55](https://github.com/gabrielima7/ag-up/pull/55)).
+
+### Changed
+- **Version bump:** Updated version constants to `v0.2.1` across `main.go`, `internal/updater/updater.go`, `internal/checker/checker.go`, and documentation.
+- **Download Timeouts & Retry Budgets (`internal/updater`):** Increased download per-attempt timeout from 2 minutes to 5 minutes and expanded total download timeout from 5 minutes to 10 minutes in `downloader.go` to provide ample headroom for large downloads over slow network connections and allow full retry loops ([PR #52](https://github.com/gabrielima7/ag-up/pull/52)).
+- **Checker Retry & Context Timeouts (`internal/checker`):** Introduced a 15-second per-attempt timeout in the `fetchLatestRelease` retry loop and expanded top-level `Check` context timeout to 2 minutes to accommodate exponential backoff without stalling ([PR #43](https://github.com/gabrielima7/ag-up/pull/43), [PR #44](https://github.com/gabrielima7/ag-up/pull/44)).
+
+### Fixed (Security, Concurrency & Resilience)
+- **Physical Durability via `fsync` (`internal/desktop`, `internal/manifest`, `internal/updater`):** Added explicit `f.Sync()` calls prior to `f.Close()` for all temporary files across desktop entry generation (`Generate`, `maybeUpdateDesktopExec`), manifest persistence (`saveLocked`), tarball downloading (`DownloadTarGz`), and application extraction (`extractCLI`, `extractAndInstall`). This guarantees dirty buffers are explicitly flushed to physical disk before atomic `os.Rename` operations, making atomic writes resilient against power outages or system crashes ([PR #50](https://github.com/gabrielima7/ag-up/pull/50)).
+- **Data Races in Manifest Persistence (`internal/manifest`):** Cloned `m.Apps` into an isolated map (`dtoApps`) inside `saveLocked` before passing to DTO, preventing race conditions with concurrent readers during JSON serialization reflection ([PR #50](https://github.com/gabrielima7/ag-up/pull/50)).
+- **Manifest Self-Healing & In-Memory State Rollback (`internal/manifest`):**
+  - Handled empty (0-byte) and corrupted JSON manifests gracefully by resetting to a clean manifest with structured warning logs (`slog.Warn`), preventing fatal updater startup failures ([PR #43](https://github.com/gabrielima7/ag-up/pull/43), [PR #44](https://github.com/gabrielima7/ag-up/pull/44)).
+  - Implemented automatic in-memory rollback of application entries in `Set()`, `MarkChecked()`, and `MarkInstalled()` if disk writes (`saveLocked`) fail ([PR #43](https://github.com/gabrielima7/ag-up/pull/43), [PR #44](https://github.com/gabrielima7/ag-up/pull/44)).
+- **UI Goroutine Leak Remediation (`internal/ui`):** Fixed potential goroutine leaks in the interactive input reader by passing explicit arguments (`bgCtx`, `reader`, `reqCh`, `readDone`) to goroutine closures to optimize escape analysis, closing `readDone` on exit, and cleanly unblocking upon context cancellation ([PR #42](https://github.com/gabrielima7/ag-up/pull/42)).
+- **File Descriptor & Temporary File Cleanup on Windows (`internal/updater`):** Guaranteed `outFile.Close()` is deferred before temporary file removal (`os.Remove`), preventing `Access is denied` file lock errors on Windows during extraction aborts, and tracked successful renames via `removeOnExit` to avoid unnecessary cleanup attempts ([PR #43](https://github.com/gabrielima7/ag-up/pull/43), [PR #44](https://github.com/gabrielima7/ag-up/pull/44)).
+- **HTTP Response Nil Pointer Guards (`internal/checker`):** Added explicit `resp == nil` defensive validation checks in `fetchJSON` and `fetchHTML` before response header and body processing, achieving 100% NilAway static analysis compliance.
+
+### Performance & Optimization
+- **Pre-Compiled Desktop Entry Template (`internal/desktop`):** Optimized template execution in `desktop.go` by pre-compiling `desktopTemplate` at package initialization via `template.Must(template.New("desktop").Parse(desktopTemplate))`, eliminating redundant compilation allocations on every `.desktop` generation ([PR #42](https://github.com/gabrielima7/ag-up/pull/42)).
+- **Desktop Directory Slice Allocation (`internal/desktop`):** Replaced slice loop iteration with direct variadic `append` (staticcheck S1011) when scanning localized Desktop directory candidates.
+- **Closure Escape Analysis Optimization (`internal/ui`):** Refactored interactive reader closures to accept parameters explicitly rather than capturing outer pointers, improving stack allocation and reducing heap pressure ([PR #42](https://github.com/gabrielima7/ag-up/pull/42)).
+
+### Dependencies
+- Updated `github.com/gabrielima7/GopherCore`: `v0.4.1` → `v0.5.0` (Dual Go 1.26/1.27 compatibility matrix, Ultimate Chaos verification scaling up to 10k goroutines, context-aware circuit breaking, and goroutine leak hardening via `goleak`).
+- Updated Go toolchain target: `1.26` → `1.26.9` (mitigating standard library HTTP/2 vulnerabilities).
+- Updated direct and indirect dependencies to their latest compatible patch releases:
+  - `github.com/go-playground/locales`: `v0.14.1` → `v0.14.2`
+  - `github.com/goccy/go-json`: `v0.10.6` → `v0.11.2`
+  - `github.com/redis/go-redis/v9`: `v9.22.0` → `v9.23.0`
+  - `golang.org/x/crypto`: `v0.57.0` → `v0.58.0`
+  - `golang.org/x/net`: `v0.59.0` → `v0.61.0` (via `v0.60.0` in PR #52)
+  - `golang.org/x/sys`: `v0.48.0` → `v0.49.0`
+  - `golang.org/x/text`: `v0.42.0` → `v0.43.0`
+
+---
+
+### Merged Pull Requests (since v0.2.0)
+
+The following 5 Pull Requests were reviewed, validated, and merged into the project between `v0.2.0` and `v0.2.1`:
+
+| PR # | Title | Merge Date | Details |
+| :---: | :--- | :---: | :--- |
+| [#55](https://github.com/gabrielima7/ag-up/pull/55) | **fix: ensure applications directory exists before creating desktop shortcut** | 2026-10-16 | Automatically provisions `~/.local/share/applications` with `0750` permissions if missing before generating `.desktop` entries. |
+| [#52](https://github.com/gabrielima7/ag-up/pull/52) | **fix: implement zip-bomb protection, update vulnerable dependencies, and harden timeouts** | 2026-10-13 | Introduces `hardLimitReader` to enforce 2GB uncompressed limit per file against decompression bombs, increases download timeouts to 5m/10m, updates `golang.org/x/net` to `v0.60.0` and Go to `1.26.9`, and adds comprehensive unit tests. |
+| [#50](https://github.com/gabrielima7/ag-up/pull/50) | **fix(core): Resolve data races in manifest and enforce atomic durability via fsync** | 2026-10-08 | Deep-copies `m.Apps` during serialization to prevent JSON reflection data races, and adds `f.Sync()` calls before `Close()` across all temporary files for atomic write crash resilience. |
+| [#43](https://github.com/gabrielima7/ag-up/pull/43), [#44](https://github.com/gabrielima7/ag-up/pull/44) | **fix: harden updater, checker resilience, and manifest self-healing** | 2026-09-30 | Adds 15s per-attempt checker timeouts, self-heals 0-byte/corrupted manifests, implements in-memory rollback on save failure, ensures Windows file unlock before temp file deletion, and adds full manifest unit tests. |
+| [#42](https://github.com/gabrielima7/ag-up/pull/42) | **refactor: fix goroutine leak in ui.go and optimize template parsing in desktop.go** | 2026-09-28 | Fixes goroutine leak and escape analysis in interactive input reader via explicit closure arguments and context cancellation; pre-compiles desktop entry template at package initialization. |
+
+---
 
 ## [v0.2.0] - 2026-09-25
 

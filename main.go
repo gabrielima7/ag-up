@@ -1,4 +1,4 @@
-// Command ag-up is the Google Antigravity Universal Updater (v0.2.0).
+// Command ag-up is the Google Antigravity Universal Updater (v0.2.1).
 // It manages the installation and update of:
 //   - Google Antigravity CLI (agy)
 //   - Google Antigravity IDE
@@ -44,8 +44,8 @@ import (
 )
 
 // Version is the current release of ag-up.
-// Override at build time: go build -ldflags "-X main.Version=v0.2.0" .
-const Version = "v0.2.0"
+// Override at build time: go build -ldflags "-X main.Version=v0.2.1" .
+const Version = "v0.2.1"
 
 func main() {
 	// -----------------------------------------------------------------------

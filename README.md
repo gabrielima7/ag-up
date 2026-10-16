@@ -21,14 +21,14 @@
 | 🧵 **Thread-Safe Console** | Centralized `printer.Mutex` eliminates data races and corrupted stdout output |
 | 🔁 **Resilient Networking** | Exponential backoff + jitter via GopherCore `retry`; fast-fails on HTTP 4xx |
 | 🔌 **Connection Pooling** | Bounded body draining (`io.LimitReader`) for persistent HTTP/1.1 keep-alive reuse |
-| 🛡️ **DevSecOps Hardening** | Tar extraction validates `filepath.IsLocal` (Zip Slip) and masks modes (`& 0777`) |
-| 🔒 **Atomic File Ops** | Atomic temp-file write-and-rename (`.tmp.<pid>.<nano>`) guarantees zero corruption on crash |
+| 🛡️ **DevSecOps Hardening** | Tar extraction validates `filepath.IsLocal` (Zip Slip), masks modes (`& 0777`), and caps files at 2GB via `hardLimitReader` |
+| 🔒 **Atomic File Ops** | Atomic temp-file write-and-rename (`.tmp.<pid>.<nano>`) with `f.Sync()` durability guarantees zero corruption on crash |
 | 🔐 **SHA-512 Verification** | Cryptographic integrity check on every CLI tarball before extraction |
 | 🧹 **Always-Clean Install** | Wipes previous `dataDir` with `os.RemoveAll` before every extraction — no ghost files |
 | 📋 **Structured Logging** | JSON logs via GopherCore `logkit` / `log/slog` (WARN+ only in interactive mode) |
 | 📁 **XDG Compliant** | Binaries in `~/.local/bin/`, data in `~/.local/share/antigravity/` |
 | 🖥️ **Desktop Integration** | Auto-generates `.desktop` launchers for GUI apps (IDE & Hub) |
-| 🗺️ **Version Manifest** | Fast JSON persistence via GopherCore `jsonutil` with reflection-safe DTOs |
+| 🗺️ **Version Manifest** | Fast JSON persistence via GopherCore `jsonutil` with reflection-safe DTOs, self-healing, and state rollback |
 | 🎛️ **Dual Mode** | Interactive terminal menu **or** non-interactive CLI flags |
 | 📊 **Real-time Feedback** | Per-step progress prints (`[app_id] Downloading…`, `Extracting…`, `Installing…`) |
 
@@ -65,7 +65,7 @@ go mod tidy
 go build -o ag-up .
 
 # (Optional) Build with version metadata embedded
-go build -ldflags "-X main.Version=v0.2.0" -o ag-up .
+go build -ldflags "-X main.Version=v0.2.1" -o ag-up .
 
 # Install to ~/.local/bin/ (XDG user binary directory)
 mkdir -p ~/.local/bin
@@ -89,7 +89,7 @@ $ ag-up
 
   ╔═══════════════════════════════════════════════╗
   ║       ag-up · Google Antigravity Updater      ║
-  ║              Universal Updater v0.2.0         ║
+  ║              Universal Updater v0.2.1         ║
   ╚═══════════════════════════════════════════════╝
 
   Choose an option:
@@ -321,8 +321,12 @@ ag-up/
 - **Always-overwrite:** Every update unconditionally wipes and reinstalls. No version-match skip logic exists in the codebase.
 - **Delete-before-create:** Both extraction paths (`extractCLI`, `extractAndInstall`) call `os.Remove(destPath)` before opening any file for writing, preventing `ELOOP` errors from dangling symlinks left after `os.RemoveAll(dataDir)`.
 - **Thread-safe synchronized output (`internal/printer`):** All terminal writes from concurrent goroutines are synchronized through a centralized `sync.Mutex`, preventing data races and corrupted terminal tables.
-- **Atomic write-and-rename:** Binaries, desktop launchers, and JSON manifests are written to process-unique temporary files (`.tmp.<pid>.<nano>` / `os.CreateTemp`) with explicit permissions before atomic `os.Rename`, ensuring crash resilience.
-- **DTO-isolated JSON serialization:** Manifest serialization and deserialization utilize dedicated data transfer objects (`manifestDTO`) to decouple `sync.RWMutex` from reflection in `jsonutil.Marshal` and `Unmarshal`, eliminating lock corruption risks.
+- **Atomic write-and-rename with fsync durability:** Binaries, desktop launchers, and JSON manifests are written to process-unique temporary files (`.tmp.<pid>.<nano>` / `os.CreateTemp`) with explicit permissions, explicitly flushed to non-volatile disk via `f.Sync()`, and then atomically replaced via `os.Rename`, ensuring crash-proof durability against power loss.
+- **Decompression bomb (Zip/Tar bomb) protection:** File extractions enforce a hard limit of 2GB per file via `hardLimitReader`, preventing denial-of-service disk-exhaustion attacks (CWE-409) without silent truncation.
+- **Manifest self-healing & rollback:** Corrupted or 0-byte manifest files on disk are automatically recovered to a clean state with structured warnings, and in-memory application metadata is atomically rolled back if persistence to disk fails.
+- **DTO-isolated JSON serialization:** Manifest serialization and deserialization utilize dedicated data transfer objects (`manifestDTO`) with defensive map deep-copying to decouple `sync.RWMutex` from reflection in `jsonutil.Marshal` and `Unmarshal`, eliminating lock corruption and reflection data races.
+- **Pre-compiled desktop launcher template:** Desktop entry generation pre-compiles `template.Must` once at package initialization, eliminating repeated template parsing overhead.
+- **Auto-provisioning applications directory:** `desktop.Generate` automatically creates `~/.local/share/applications` (`0750`) if absent, ensuring desktop shortcuts are safely placed on fresh Linux installations.
 - **Persistent HTTP connection pooling:** Response bodies are read and drained bounded via `io.LimitReader` allowing TCP/TLS connections to be returned to Go's transport pool without socket exhaustion.
 - **Context-bound interactive reading:** The interactive terminal reader unblocks immediately upon context cancellation or reader teardown (`ir.ctx.Done()`), avoiding lingering goroutines and channel deadlocks.
 - **Package-level HTTP client:** `downloader.go` uses a single `var downloaderClient` shared across all retry attempts, preserving TCP connection pooling and TLS sessions.

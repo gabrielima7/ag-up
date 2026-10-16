@@ -159,16 +159,14 @@ func SyncLegacyLaunchers(spec config.AppSpec, newBinaryPath string) {
 	// Build the list of directories to scan for legacy .desktop files.
 	scanDirs := []string{appsDir}
 	// Add common desktop directory candidates (localised and standard).
-	for _, candidate := range []string{
+	scanDirs = append(scanDirs,
 		filepath.Join(home, "Desktop"),
 		filepath.Join(home, "Área de trabalho"),
 		filepath.Join(home, "Área de Trabalho"),
 		filepath.Join(home, "Bureau"),       // French
 		filepath.Join(home, "Escritorio"),   // Spanish
 		filepath.Join(home, "Schreibtisch"), // German
-	} {
-		scanDirs = append(scanDirs, candidate)
-	}
+	)
 
 	// Also check XDG_DESKTOP_DIR if set.
 	if xdgDesktop := os.Getenv("XDG_DESKTOP_DIR"); xdgDesktop != "" {
