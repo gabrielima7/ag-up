@@ -60,6 +60,10 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: resolve applications dir: %w", err)
 	}
 
+	if err := os.MkdirAll(appsDir, 0750); err != nil {
+		return fmt.Errorf("desktop: create applications dir %q: %w", appsDir, err)
+	}
+
 	// Sanitise all string fields before rendering.
 	data := desktopData{
 		Name:           guard.SanitizeString(spec.Name),
