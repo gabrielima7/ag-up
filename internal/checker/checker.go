@@ -207,6 +207,13 @@ func fetchCLIManifest(ctx context.Context, spec config.AppSpec, localEntry manif
 // The version is embedded in path segments like ".../2.3.1-5358163105546240/...".
 var semverRe = regexp.MustCompile(`/(\d+\.\d+\.\d+)-\d+/`)
 
+// Pre-compiled regular expressions for finding the linux-x64 .tar.gz href in the download page.
+// edgedl.me.gvt1.com/.../linux-x64/Antigravity%20IDE.tar.gz
+var ideHrefRe = regexp.MustCompile(`href="(https://edgedl\.me\.gvt1\.com/[^"]*linux-x64/Antigravity(?:%20IDE)?\.tar\.gz)"`)
+
+// storage.googleapis.com/.../linux-x64/Antigravity.tar.gz  (Hub / antigravity-2)
+var hubHrefRe = regexp.MustCompile(`href="(https://storage\.googleapis\.com/[^"]*linux-x64/Antigravity\.tar\.gz)"`)
+
 // scrapeDownloadPage fetches the HTML download page for IDE or Hub, finds the
 // linux-x64 .tar.gz href within the app's designated <section id=SectionID>,
 // and extracts the SemVer tag from the URL path.
@@ -239,11 +246,9 @@ func scrapeDownloadPage(ctx context.Context, spec config.AppSpec, localEntry man
 	var hrefRe *regexp.Regexp
 	switch spec.SectionID {
 	case "antigravity-ide":
-		// edgedl.me.gvt1.com/.../linux-x64/Antigravity%20IDE.tar.gz
-		hrefRe = regexp.MustCompile(`href="(https://edgedl\.me\.gvt1\.com/[^"]*linux-x64/Antigravity(?:%20IDE)?\.tar\.gz)"`)
+		hrefRe = ideHrefRe
 	default:
-		// storage.googleapis.com/.../linux-x64/Antigravity.tar.gz  (Hub / antigravity-2)
-		hrefRe = regexp.MustCompile(`href="(https://storage\.googleapis\.com/[^"]*linux-x64/Antigravity\.tar\.gz)"`)
+		hrefRe = hubHrefRe
 	}
 
 	hrefMatch := hrefRe.FindStringSubmatch(sectionMatch)

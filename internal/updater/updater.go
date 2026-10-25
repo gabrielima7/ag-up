@@ -493,12 +493,14 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 				continue
 			}
 
+			tmpLinkPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
+
 			if hdr.Typeflag == tar.TypeLink {
-				if err := os.Link(absTarget, destPath); err != nil {
-					return "", fmt.Errorf("updater: create hardlink %q -> %q: %w", destPath, absTarget, err)
+				if err := os.Link(absTarget, tmpLinkPath); err != nil {
+					return "", fmt.Errorf("updater: create hardlink %q -> %q: %w", tmpLinkPath, absTarget, err)
 				}
 			} else {
-				if err := os.Symlink(linkTarget, destPath); err != nil {
+				if err := os.Symlink(linkTarget, tmpLinkPath); err != nil {
 					// In environments where symlinks require elevated privileges (e.g. Windows without Developer Mode)
 					// or on unsupported filesystems, warn instead of failing the entire update abruptly.
 					slog.Warn("updater: skipping symlink creation due to filesystem/OS error",
@@ -506,7 +508,14 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 						"target", linkTarget,
 						"error", err,
 					)
+					continue
 				}
+			}
+
+			// Atomically replace the destination file
+			if err := os.Rename(tmpLinkPath, destPath); err != nil {
+				_ = os.Remove(tmpLinkPath)
+				return "", fmt.Errorf("updater: rename link to %q: %w", destPath, err)
 			}
 		}
 	}

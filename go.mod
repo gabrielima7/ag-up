@@ -2,7 +2,7 @@ module github.com/gabrielima7/ag-up
 
 // Production target: Go 1.26+ (matching github.com/gabrielima7/GopherCore v0.5.0).
 // Local development: compatible with Go 1.22+ (generics, log/slog available).
-go 1.26.9
+go 1.26.10
 
 require github.com/gabrielima7/GopherCore v0.5.0
 
