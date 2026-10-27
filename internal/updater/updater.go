@@ -206,6 +206,9 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 
 		// Wrapping file extraction logic in a closure allows safe defer for os.Remove
 		err = func(buf []byte, tr *tar.Reader, destPath string) error {
+			if err := os.MkdirAll(binDir, 0750); err != nil {
+				return fmt.Errorf("updater: create bin dir %q: %w", binDir, err)
+			}
 			// Write to a uniquely-named temporary file first for atomic replacement.
 			// Incorporate os.Getpid() to prevent cross-process collisions.
 			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
@@ -593,6 +596,15 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 
 	symlinkPath := filepath.Join(binDir, appID)
 	tmpSymlinkPath := fmt.Sprintf("%s.tmp.%d.%d", symlinkPath, os.Getpid(), time.Now().UnixNano())
+
+	if err := os.MkdirAll(binDir, 0750); err != nil {
+		slog.Warn("updater: failed to ensure bin dir exists for symlink",
+			"app_id", appID,
+			"bin_dir", binDir,
+			"error", err,
+		)
+		return
+	}
 
 	// Create temporary symlink
 	if err := os.Symlink(actualBinaryPath, tmpSymlinkPath); err != nil {
