@@ -206,6 +206,11 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 
 		// Wrapping file extraction logic in a closure allows safe defer for os.Remove
 		err = func(buf []byte, tr *tar.Reader, destPath string) error {
+			// Ensure parent directory exists before creating the file
+			if err := os.MkdirAll(filepath.Dir(destPath), 0750); err != nil {
+				return fmt.Errorf("updater: mkdir for %q: %w", destPath, err)
+			}
+
 			// Write to a uniquely-named temporary file first for atomic replacement.
 			// Incorporate os.Getpid() to prevent cross-process collisions.
 			tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
