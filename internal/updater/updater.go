@@ -204,6 +204,11 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 		// Found the target binary — write it to ~/.local/bin/<BinaryName>.
 		destPath := filepath.Join(binDir, spec.BinaryName)
 
+		// Ensure the directory exists.
+		if err := os.MkdirAll(binDir, 0750); err != nil {
+			return fmt.Errorf("updater: mkdir %q: %w", binDir, err)
+		}
+
 		// Wrapping file extraction logic in a closure allows safe defer for os.Remove
 		err = func(buf []byte, tr *tar.Reader, destPath string) error {
 			// Write to a uniquely-named temporary file first for atomic replacement.
@@ -587,6 +592,14 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 	if actualBinaryPath == "" {
 		slog.Warn("updater: main binary not found during extraction, skipping symlink",
 			"app_id", appID,
+		)
+		return
+	}
+
+	if err := os.MkdirAll(binDir, 0750); err != nil {
+		slog.Warn("updater: failed to create bin directory",
+			"binDir", binDir,
+			"error", err,
 		)
 		return
 	}

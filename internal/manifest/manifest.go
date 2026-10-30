@@ -150,6 +150,9 @@ func saveLocked(m *Manifest) error {
 	// Write to a uniquely-named temporary file first, then rename — atomic on Linux.
 	// os.CreateTemp prevents predictable filename collisions if multiple ag-up processes run concurrently.
 	dir, file := filepath.Split(path)
+	if err := os.MkdirAll(dir, 0750); err != nil {
+		return fmt.Errorf("manifest: create directory %q: %w", dir, err)
+	}
 	tmpFile, err := os.CreateTemp(dir, file+".tmp.*")
 	if err != nil {
 		return fmt.Errorf("manifest: create temp file in %q: %w", dir, err)
