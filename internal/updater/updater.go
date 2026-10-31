@@ -494,11 +494,17 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 			}
 
 			if hdr.Typeflag == tar.TypeLink {
-				if err := os.Link(absTarget, destPath); err != nil {
+				tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
+				if err := os.Link(absTarget, tmpPath); err != nil {
 					return "", fmt.Errorf("updater: create hardlink %q -> %q: %w", destPath, absTarget, err)
 				}
+				if err := os.Rename(tmpPath, destPath); err != nil {
+					_ = os.Remove(tmpPath)
+					return "", fmt.Errorf("updater: rename hardlink %q: %w", destPath, err)
+				}
 			} else {
-				if err := os.Symlink(linkTarget, destPath); err != nil {
+				tmpPath := fmt.Sprintf("%s.tmp.%d.%d", destPath, os.Getpid(), time.Now().UnixNano())
+				if err := os.Symlink(linkTarget, tmpPath); err != nil {
 					// In environments where symlinks require elevated privileges (e.g. Windows without Developer Mode)
 					// or on unsupported filesystems, warn instead of failing the entire update abruptly.
 					slog.Warn("updater: skipping symlink creation due to filesystem/OS error",
@@ -506,6 +512,11 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 						"target", linkTarget,
 						"error", err,
 					)
+				} else {
+					if err := os.Rename(tmpPath, destPath); err != nil {
+						_ = os.Remove(tmpPath)
+						return "", fmt.Errorf("updater: rename symlink %q: %w", destPath, err)
+					}
 				}
 			}
 		}
