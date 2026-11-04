@@ -349,6 +349,15 @@ func Check(
 	return fetchLatestRelease(timeoutCtx, spec, localEntry, maxRetries)
 }
 
+// checkTask bundles the arguments needed for a single version check
+// so they can be passed explicitly to the async.Map closure, preventing
+// them from escaping to the heap via implicit capture.
+type checkTask struct {
+	spec       config.AppSpec
+	m          *manifest.Manifest
+	maxRetries int
+}
+
 // CheckAll performs parallel version checks for all provided AppSpecs using async.Map.
 func CheckAll(
 	ctx context.Context,
@@ -356,12 +365,21 @@ func CheckAll(
 	m *manifest.Manifest,
 	maxRetries int,
 ) ([]result.Result[CheckResult], error) {
+	tasks := make([]checkTask, len(specs))
+	for i, spec := range specs {
+		tasks[i] = checkTask{
+			spec:       spec,
+			m:          m,
+			maxRetries: maxRetries,
+		}
+	}
+
 	results, err := async.Map(
 		ctx,
-		specs,
+		tasks,
 		3,
-		func(ctx context.Context, spec config.AppSpec) (result.Result[CheckResult], error) {
-			r := Check(ctx, spec, m, maxRetries)
+		func(ctx context.Context, t checkTask) (result.Result[CheckResult], error) {
+			r := Check(ctx, t.spec, t.m, t.maxRetries)
 			return r, nil
 		},
 	)

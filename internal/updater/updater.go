@@ -849,6 +849,15 @@ func Update(
 	return result.Ok(summary)
 }
 
+// updateTask bundles the arguments needed for a single update
+// so they can be passed explicitly to the async.Map closure, preventing
+// them from escaping to the heap via implicit capture.
+type updateTask struct {
+	spec       config.AppSpec
+	m          *manifest.Manifest
+	maxRetries int
+}
+
 // UpdateAll concurrently updates all provided AppSpecs using async.Map.
 // Every spec receives a clean install — no version-match skipping occurs.
 func UpdateAll(
@@ -857,12 +866,21 @@ func UpdateAll(
 	m *manifest.Manifest,
 	maxRetries int,
 ) ([]result.Result[AppUpdateSummary], error) {
+	tasks := make([]updateTask, len(specs))
+	for i, spec := range specs {
+		tasks[i] = updateTask{
+			spec:       spec,
+			m:          m,
+			maxRetries: maxRetries,
+		}
+	}
+
 	results, err := async.Map(
 		ctx,
-		specs,
+		tasks,
 		3,
-		func(ctx context.Context, spec config.AppSpec) (result.Result[AppUpdateSummary], error) {
-			r := Update(ctx, spec, m, maxRetries)
+		func(ctx context.Context, t updateTask) (result.Result[AppUpdateSummary], error) {
+			r := Update(ctx, t.spec, t.m, t.maxRetries)
 			return r, nil
 		},
 	)
