@@ -87,17 +87,17 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 	tmpPath := f.Name()
 
 	removeOnExit := true
-	defer func() {
-		_ = f.Close()
+	defer func(file *os.File, p string) {
+		_ = file.Close()
 		if removeOnExit {
-			if rmErr := os.Remove(tmpPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			if rmErr := os.Remove(p); rmErr != nil && !os.IsNotExist(rmErr) {
 				slog.Warn("downloader: failed to remove temp file on error path",
-					"path", tmpPath,
+					"path", p,
 					"error", rmErr,
 				)
 			}
 		}
-	}()
+	}(f, tmpPath)
 
 	err = retry.Do(ctx,
 		func(attemptCtx context.Context) error {
@@ -127,7 +127,7 @@ func DownloadTarGz(ctx context.Context, rawURL, appID string, maxRetries int) (s
 				}
 				return fmt.Errorf("downloader: GET %q for %q: %w", safeURL, appID, err)
 			}
-			defer func() { _ = resp.Body.Close() }()
+			defer func(c io.Closer) { _ = c.Close() }(resp.Body)
 
 			if resp.StatusCode != http.StatusOK {
 				// Use io.LimitReader to prevent hanging on unbounded error responses

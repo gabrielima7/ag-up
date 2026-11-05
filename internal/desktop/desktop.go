@@ -82,7 +82,7 @@ func Generate(spec config.AppSpec, binaryPath string) error {
 		return fmt.Errorf("desktop: create temp file in %q: %w", dir, err)
 	}
 	tmpPath := f.Name()
-	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
+	defer func(p string) { _ = os.Remove(filepath.Clean(p)) }(tmpPath)
 
 	// Ensure the file is readable by the desktop environment (0644).
 	// #nosec G302
@@ -263,7 +263,7 @@ func maybeUpdateDesktopExec(path string, spec config.AppSpec, newBinaryPath stri
 	}
 	tmpPath := tmp.Name()
 	// #nosec G703
-	defer func() { _ = os.Remove(filepath.Clean(tmpPath)) }()
+	defer func(p string) { _ = os.Remove(filepath.Clean(p)) }(tmpPath)
 
 	// Preserve original permissions.
 	// #nosec G703

@@ -158,7 +158,7 @@ func saveLocked(m *Manifest) error {
 		return fmt.Errorf("manifest: create temp file in %q: %w", dir, err)
 	}
 	tmpPath := tmpFile.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
+	defer func(p string) { _ = os.Remove(p) }(tmpPath)
 
 	if err := tmpFile.Chmod(0644); err != nil {
 		_ = tmpFile.Close()

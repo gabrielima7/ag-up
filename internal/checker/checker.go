@@ -119,7 +119,7 @@ func fetchJSON(ctx context.Context, url string, dest interface{}) error {
 	if resp == nil {
 		return fmt.Errorf("checker: GET %q returned nil response", url)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
@@ -153,7 +153,7 @@ func fetchHTML(ctx context.Context, pageURL string) (string, error) {
 	if resp == nil {
 		return "", fmt.Errorf("checker: GET %q returned nil response", pageURL)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))

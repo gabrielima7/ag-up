@@ -114,7 +114,7 @@ func verifySHA512(path, expected string) error {
 	if err != nil {
 		return fmt.Errorf("sha512: open %q: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(f)
 
 	h := sha512.New()
 	bufPtr := copyBufPool.Get().(*[]byte)
@@ -150,13 +150,13 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 	if err != nil {
 		return fmt.Errorf("updater: open tarball %q: %w", tarGzPath, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(f)
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("updater: gzip reader: %w", err)
 	}
-	defer func() { _ = gz.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(gz)
 
 	tr := tar.NewReader(gz)
 
@@ -224,7 +224,7 @@ func extractCLI(ctx context.Context, tarGzPath string, spec config.AppSpec) erro
 					_ = os.Remove(p)
 				}
 			}(tmpPath)
-			defer func() { _ = outFile.Close() }()
+			defer func(c io.Closer) { _ = c.Close() }(outFile)
 
 			if err := outFile.Chmod(0755); err != nil {
 				return fmt.Errorf("updater: chmod %q: %w", tmpPath, err)
@@ -305,19 +305,19 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 	if err := os.MkdirAll(tmpDataDir, 0750); err != nil {
 		return "", fmt.Errorf("updater: create temp install dir %q: %w", tmpDataDir, err)
 	}
-	defer func() { _ = os.RemoveAll(tmpDataDir) }()
+	defer func(d string) { _ = os.RemoveAll(d) }(tmpDataDir)
 
 	f, err := os.Open(tarGzPath)
 	if err != nil {
 		return "", fmt.Errorf("updater: open tarball %q: %w", tarGzPath, err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(f)
 
 	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return "", fmt.Errorf("updater: gzip reader: %w", err)
 	}
-	defer func() { _ = gz.Close() }()
+	defer func(c io.Closer) { _ = c.Close() }(gz)
 
 	tr := tar.NewReader(gz)
 
@@ -402,7 +402,7 @@ func extractAndInstall(ctx context.Context, tarGzPath string, spec config.AppSpe
 						_ = os.Remove(p)
 					}
 				}(tmpPath)
-				defer func() { _ = outFile.Close() }()
+				defer func(c io.Closer) { _ = c.Close() }(outFile)
 
 				// Explicit chmod before write — safety net against umask stripping +x.
 				if err := outFile.Chmod(fileMode); err != nil {
@@ -628,7 +628,7 @@ func createGUISymlink(binDir, appID, actualBinaryPath string) {
 		)
 		return
 	}
-	defer func() { _ = os.Remove(tmpSymlinkPath) }() // Safe cleanup on panic/early return
+	defer func(p string) { _ = os.Remove(p) }(tmpSymlinkPath) // Safe cleanup on panic/early return
 
 	// Atomically rename it over the old one
 	if err := os.Rename(tmpSymlinkPath, symlinkPath); err != nil {
@@ -758,7 +758,7 @@ func Update(
 		)
 		return result.Err[AppUpdateSummary](summary.Error)
 	}
-	defer func() { _ = os.Remove(tarGzPath) }()
+	defer func(p string) { _ = os.Remove(p) }(tarGzPath)
 
 	// --- Step 3: SHA-512 security validation ---
 	if cr.ExpectedSHA512 != "" {
